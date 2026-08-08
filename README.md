@@ -1,28 +1,12 @@
-# OST Tracker — GitHub + Vercel + PWA
+# OST Tracker - Vercel PWA Install Fix
 
-Repository frontend publik untuk OST Tracker.
+Upload seluruh isi folder ini ke root repository GitHub `OST_Tracker`, menggantikan versi PWA sebelumnya.
 
-## Siap deploy
-Tidak memerlukan Node.js, npm, framework, atau build command.
+## File utama
+- `index.html` - shell aplikasi + install handler Android/iOS/Desktop
+- `manifest.webmanifest` - manifest PWA untuk root domain Vercel
+- `sw.js` - service worker
+- `vercel.json` - header manifest/service worker
+- `icons/` - icon normal + maskable
 
-### Vercel
-- Import repository GitHub ini.
-- Framework Preset: **Other**.
-- Root Directory: `./`
-- Build Command: kosong/default.
-- Output Directory: kosong/default.
-- Deploy.
-
-### GitHub Pages
-Tetap kompatibel dengan GitHub Pages karena `index.html` berada di root.
-
-## Struktur
-- `index.html` — shell aplikasi / entry point
-- `404.html` — fallback GitHub Pages
-- `manifest.webmanifest` — metadata PWA
-- `sw.js` — cache shell lokal; tidak meng-cache backend Apps Script
-- `vercel.json` — header PWA/service worker
-- `icons/` — icon PWA
-
-## Backend
-Backend tetap berjalan di Google Apps Script Web App dan database tetap Google Sheets/Drive.
+Setelah commit, Vercel akan redeploy otomatis jika repository sudah connected. Tunggu deployment Production selesai, lalu buka URL Production Vercel dari Chrome/Safari (bukan preview browser di aplikasi chat).

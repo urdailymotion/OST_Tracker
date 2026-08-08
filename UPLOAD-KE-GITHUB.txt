@@ -1,33 +1,11 @@
-OST TRACKER - UPDATE SIAP UPLOAD KE GITHUB
-==========================================
+OST Tracker Vercel PWA INSTALL FIX
 
-UPLOAD / REPLACE FILE BERIKUT DI ROOT REPOSITORY OST_Tracker:
+1. Extract ZIP.
+2. Upload SEMUA isi folder ke ROOT repository OST_Tracker.
+3. Replace file lama jika diminta.
+4. Commit changes.
+5. Tunggu Vercel Production Deployment selesai.
+6. Android: buka URL Production via Chrome dan tekan Install App.
+7. iPhone/iPad: buka via Safari > Share > Add to Home Screen.
 
-404.html
-index.html
-manifest.webmanifest
-sw.js
-vercel.json
-README.md
-icons/apple-touch-icon.png
-icons/favicon.png
-icons/icon-192.png
-icons/icon-512.png
-
-PENTING UNTUK REPOSITORY PUBLIC:
-Sebaiknya HAPUS dari repo public:
-- Code.gs
-- Index.html
-- appsscript.json
-
-Ketiga file tersebut adalah source/backend Google Apps Script dan tidak diperlukan Vercel frontend.
-
-SETELAH UPLOAD:
-1. Commit changes.
-2. Buka Vercel.
-3. Add New > Project.
-4. Import Git Repository > OST_Tracker.
-5. Framework Preset = Other.
-6. Deploy.
-
-Tidak perlu npm, Node.js, Build Command, atau Output Directory khusus.
+JANGAN upload ZIP-nya sebagai satu file. Upload ISI foldernya.
