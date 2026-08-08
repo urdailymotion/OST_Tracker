@@ -1,14 +1,1 @@
-OST Tracker Vercel PWA INSTALL FIX
-
-1. Extract ZIP.
-2. Upload SEMUA isi folder ke ROOT repository OST_Tracker.
-3. Replace file lama jika diminta.
-4. Commit changes.
-5. Tunggu Vercel Production Deployment selesai.
-6. Android: buka URL Production via Chrome dan tekan Install App.
-7. iPhone/iPad: buka via Safari > Share > Add to Home Screen.
-
-JANGAN upload ZIP-nya sebagai satu file. Upload ISI foldernya.
-
-
-UPDATE V3 INSTALL-STATE: Upload/replace index.html dan sw.js minimal, atau upload seluruh isi folder. Setelah commit, tunggu Vercel deployment Ready lalu buka production URL dengan Chrome Android.
+UPLOAD SEMUA FILE INI KE ROOT REPOSITORY OST_Tracker. Jangan buat folder icons. Replace file lama, Commit changes, lalu tunggu Vercel Production = Ready.

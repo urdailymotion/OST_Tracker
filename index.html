@@ -11,16 +11,16 @@
   <meta name="application-name" content="OST Tracker">
   <meta name="description" content="Outstanding Backlog & Vendor ETA">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="icon" type="image/png" href="/icons/favicon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="/favicon.png">
   <title>OST Tracker | Outstanding Backlog & Vendor ETA</title>
-  <meta name="ost-pwa-version" content="install-state-fix-v3">
+  <meta name="ost-pwa-version" content="webapk-flat-fix-v4">
   <style>
     :root{--primary:#991b1b;--primary2:#dc2626;--navy:#071326;--surface:#fff;--ink:#172033;--muted:#64748b}
     *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--navy);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     .shell{position:fixed;inset:0;background:var(--navy)}iframe{display:block;width:100%;height:100%;border:0;background:#fff}
     .loading{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:#fff;background:radial-gradient(circle at top,#17375f 0%,#071326 55%,#040b16 100%);transition:.25s}
-    .loading.hide{opacity:0;visibility:hidden;pointer-events:none}.brand{width:78px;height:78px;border-radius:22px;background:#fff url('/icons/icon-192.png') center/cover no-repeat;box-shadow:0 16px 40px rgba(0,0,0,.28)}
+    .loading.hide{opacity:0;visibility:hidden;pointer-events:none}.brand{width:78px;height:78px;border-radius:22px;background:#fff url('/icon-192.png') center/cover no-repeat;box-shadow:0 16px 40px rgba(0,0,0,.28)}
     .loading strong{font-size:18px}.loading small{font-size:12px;color:#b9c8d9}.spinner{width:30px;height:30px;border:3px solid rgba(255,255,255,.22);border-top-color:#fff;border-radius:50%;animation:spin .72s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
     .app-actions{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:8;display:flex;gap:8px;align-items:center}.app-btn{appearance:none;border:0;border-radius:12px;padding:11px 14px;text-decoration:none;font:800 12px/1 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 26px rgba(0,0,0,.22);cursor:pointer}.install{display:inline-flex;background:linear-gradient(135deg,var(--primary),var(--primary2));color:#fff}.open{background:#111827;color:#fff}
     .modal-bg{display:none;position:fixed;inset:0;z-index:30;background:rgba(2,6,23,.72);align-items:center;justify-content:center;padding:20px}.modal-bg.show{display:flex}.modal{width:min(440px,100%);background:#fff;color:#172033;border-radius:22px;padding:22px;box-shadow:0 28px 80px rgba(0,0,0,.35)}.modal h2{font-size:20px;margin:0 0 9px}.modal p{font-size:13px;line-height:1.55;color:#64748b;margin:0 0 12px}.steps{background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:13px;font-size:13px;line-height:1.7;margin:12px 0}.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}.modal-actions button{border:0;border-radius:11px;padding:10px 13px;font-weight:800;cursor:pointer}.close{background:#e2e8f0;color:#334155}.retry{background:#991b1b;color:#fff}

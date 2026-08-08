@@ -1,19 +1,16 @@
-# OST Tracker - Vercel PWA Install Fix
+# OST Tracker — Vercel PWA / WebAPK FLAT FIX
 
-Upload seluruh isi folder ini ke root repository GitHub `OST_Tracker`, menggantikan versi PWA sebelumnya.
+Versi ini dibuat khusus agar semua file dapat di-upload langsung ke ROOT repository GitHub tanpa folder `icons`.
 
-## File utama
-- `index.html` - shell aplikasi + install handler Android/iOS/Desktop
-- `manifest.webmanifest` - manifest PWA untuk root domain Vercel
-- `sw.js` - service worker
-- `vercel.json` - header manifest/service worker
-- `icons/` - icon normal + maskable
+## Upload ke root repository
+Upload/replace semua file dalam paket ini. Setelah commit, tunggu deployment Vercel berstatus Ready.
 
-Setelah commit, Vercel akan redeploy otomatis jika repository sudah connected. Tunggu deployment Production selesai, lalu buka URL Production Vercel dari Chrome/Safari (bukan preview browser di aplikasi chat).
+## Tes Android
+1. Gunakan Google Chrome Android.
+2. Buka URL production Vercel (bukan GitHub Pages dan bukan browser dalam WhatsApp/Telegram).
+3. Refresh setelah deployment baru selesai.
+4. Tunggu sampai tombol Install App tersedia dan tekan tombol tersebut.
+5. Dialog Chrome harus menawarkan **Install**, bukan hanya pembuatan shortcut biasa.
+6. Setelah berhasil, buka OST Tracker dari ikon launcher. Tombol Install akan disembunyikan pada mode standalone / setelah event appinstalled.
 
-
-## Install-state fix V3
-- Tombol Install hanya tampil saat aplikasi belum terpasang.
-- Setelah event `appinstalled`, status tersimpan dan CTA Install langsung hilang.
-- Saat aplikasi dibuka dari Home Screen dalam `standalone`, CTA Install selalu disembunyikan.
-- Jika aplikasi di-uninstall dan browser kembali menawarkan `beforeinstallprompt`, marker lama otomatis dibersihkan.
+Jika pernah membuka versi lama, hapus data situs/cache untuk domain Vercel atau uninstall shortcut lama sebelum pengujian ulang agar service worker/manifest lama tidak tertahan.
