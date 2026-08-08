@@ -1,0 +1,33 @@
+OST TRACKER - UPDATE SIAP UPLOAD KE GITHUB
+==========================================
+
+UPLOAD / REPLACE FILE BERIKUT DI ROOT REPOSITORY OST_Tracker:
+
+404.html
+index.html
+manifest.webmanifest
+sw.js
+vercel.json
+README.md
+icons/apple-touch-icon.png
+icons/favicon.png
+icons/icon-192.png
+icons/icon-512.png
+
+PENTING UNTUK REPOSITORY PUBLIC:
+Sebaiknya HAPUS dari repo public:
+- Code.gs
+- Index.html
+- appsscript.json
+
+Ketiga file tersebut adalah source/backend Google Apps Script dan tidak diperlukan Vercel frontend.
+
+SETELAH UPLOAD:
+1. Commit changes.
+2. Buka Vercel.
+3. Add New > Project.
+4. Import Git Repository > OST_Tracker.
+5. Framework Preset = Other.
+6. Deploy.
+
+Tidak perlu npm, Node.js, Build Command, atau Output Directory khusus.
