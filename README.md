@@ -1,32 +1,15 @@
-# Outstanding Backlog | Vendor ETA
+# Outstanding Backlog - GitHub Pages Front Door
 
-GitHub source-control package for the existing Google Apps Script web application.
+File ini khusus untuk GitHub Pages.
 
-## Architecture
+## Upload
+Upload file berikut ke ROOT repository yang dipakai GitHub Pages:
+- index.html
+- 404.html
+- README.md (opsional)
 
-- **Frontend:** `Index.html`
-- **Backend:** `Code.gs`
-- **Runtime / hosting:** Google Apps Script Web App
-- **Database:** Google Spreadsheet bound to the Apps Script project
-- **Photo storage:** Google Drive through Apps Script
-- **Source control:** GitHub (PRIVATE repository)
+GitHub Pages wajib memakai `index.html` huruf kecil.
 
-> GitHub is used here to store versions of the source code. The production application continues to run on Google Apps Script because the frontend uses `google.script.run` and the backend uses Apps Script services.
+Aplikasi utama tetap berjalan pada Google Apps Script Web App. Halaman GitHub hanya menjadi front door/full-screen wrapper agar fungsi `google.script.run`, SpreadsheetApp, DriveApp, dan session Apps Script tetap bekerja.
 
-## Important filenames
-
-Apps Script is case-sensitive for HTML file references in this project. `Code.gs` calls `HtmlService.createTemplateFromFile('Index')`, therefore keep the frontend filename as exactly:
-
-`Index.html`
-
-## Beginner migration
-
-Read **`MIGRASI-GITHUB-PEMULA.md`** and follow **Fase A** first. Fase A requires only a browser and does not change the existing Web App.
-
-## Optional local synchronization
-
-After the GitHub copy is safely stored, `clasp` can be used later to synchronize GitHub/local files with the existing Apps Script project. Do not start with this until the browser-only backup is confirmed.
-
-## Safety
-
-Read `SECURITY.md`. Keep the repository **PRIVATE**.
+Jika iframe diblokir oleh kebijakan browser/domain perusahaan, gunakan tombol **Buka langsung** di kanan bawah.
