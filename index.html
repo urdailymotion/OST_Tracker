@@ -14,6 +14,7 @@
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="/icons/favicon.png">
   <title>OST Tracker | Outstanding Backlog & Vendor ETA</title>
+  <meta name="ost-pwa-version" content="install-state-fix-v3">
   <style>
     :root{--primary:#991b1b;--primary2:#dc2626;--navy:#071326;--surface:#fff;--ink:#172033;--muted:#64748b}
     *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--navy);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -55,19 +56,47 @@
     const installBtn=document.getElementById('installBtn'),installedBadge=document.getElementById('installedBadge');
     const installHelp=document.getElementById('installHelp'),helpTitle=document.getElementById('helpTitle'),helpText=document.getElementById('helpText'),helpSteps=document.getElementById('helpSteps');
     let deferredPrompt=null,loaded=false;
+    const INSTALL_FLAG='ost_tracker_pwa_installed_v1';
 
     function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone===true}
     function isIOS(){return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)}
     function isAndroid(){return /android/i.test(navigator.userAgent)}
-    function updateInstallUi(){const installed=isStandalone();installBtn.style.display=installed?'none':'inline-flex';installedBadge.classList.toggle('show',installed)}
+    function getInstalledFlag(){try{return localStorage.getItem(INSTALL_FLAG)==='1'}catch(e){return false}}
+    function setInstalledFlag(value){try{value?localStorage.setItem(INSTALL_FLAG,'1'):localStorage.removeItem(INSTALL_FLAG)}catch(e){}}
+    function isInstalled(){return isStandalone() || getInstalledFlag()}
+    function updateInstallUi(){
+      const installed=isInstalled();
+      installBtn.style.display=installed?'none':'inline-flex';
+      // Permintaan user: setelah terpasang, anjuran install hilang total.
+      installedBadge.classList.remove('show');
+      if(installed) installHelp.classList.remove('show');
+    }
+    if(isStandalone()) setInstalledFlag(true);
     updateInstallUi();
 
     function hideLoading(){if(loaded)return;loaded=true;setTimeout(()=>loading.classList.add('hide'),250)}
     frame.addEventListener('load',hideLoading);setTimeout(hideLoading,12000);
     function refreshOnlineState(){offlineCard.classList.toggle('show',!navigator.onLine)}window.addEventListener('online',refreshOnlineState);window.addEventListener('offline',refreshOnlineState);refreshOnlineState();
 
-    window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;updateInstallUi()});
-    window.addEventListener('appinstalled',()=>{deferredPrompt=null;updateInstallUi()});
+    window.addEventListener('beforeinstallprompt',e=>{
+      e.preventDefault();
+      deferredPrompt=e;
+      // Jika browser menawarkan install lagi, berarti app tidak sedang terpasang.
+      // Hapus marker lama (misalnya setelah user uninstall).
+      if(!isStandalone()) setInstalledFlag(false);
+      updateInstallUi();
+    });
+    window.addEventListener('appinstalled',()=>{
+      deferredPrompt=null;
+      setInstalledFlag(true);
+      updateInstallUi();
+    });
+
+    // Sinkronkan UI ketika berpindah dari browser ke mode aplikasi / kembali fokus.
+    try{window.matchMedia('(display-mode: standalone)').addEventListener('change',()=>{if(isStandalone())setInstalledFlag(true);updateInstallUi()})}catch(e){}
+    window.addEventListener('pageshow',updateInstallUi);
+    window.addEventListener('focus',updateInstallUi);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)updateInstallUi()});
 
     function showHelp(){
       if(isIOS()){
@@ -87,12 +116,17 @@
     }
 
     async function requestInstall(){
-      if(isStandalone()){updateInstallUi();return}
+      if(isInstalled()){updateInstallUi();return}
       if(deferredPrompt){
-        deferredPrompt.prompt();
-        const choice=await deferredPrompt.userChoice.catch(()=>null);
-        if(choice&&choice.outcome==='accepted'){deferredPrompt=null;updateInstallUi();return}
+        const promptEvent=deferredPrompt;
         deferredPrompt=null;
+        promptEvent.prompt();
+        const choice=await promptEvent.userChoice.catch(()=>null);
+        if(choice&&choice.outcome==='accepted'){
+          // appinstalled akan menjadi sumber status final dan menyembunyikan CTA.
+          // Jangan tampilkan fallback help setelah user menerima prompt native.
+          return;
+        }
       }
       showHelp();
     }

@@ -9,3 +9,6 @@ OST Tracker Vercel PWA INSTALL FIX
 7. iPhone/iPad: buka via Safari > Share > Add to Home Screen.
 
 JANGAN upload ZIP-nya sebagai satu file. Upload ISI foldernya.
+
+
+UPDATE V3 INSTALL-STATE: Upload/replace index.html dan sw.js minimal, atau upload seluruh isi folder. Setelah commit, tunggu Vercel deployment Ready lalu buka production URL dengan Chrome Android.

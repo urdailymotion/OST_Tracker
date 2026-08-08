@@ -10,3 +10,10 @@ Upload seluruh isi folder ini ke root repository GitHub `OST_Tracker`, mengganti
 - `icons/` - icon normal + maskable
 
 Setelah commit, Vercel akan redeploy otomatis jika repository sudah connected. Tunggu deployment Production selesai, lalu buka URL Production Vercel dari Chrome/Safari (bukan preview browser di aplikasi chat).
+
+
+## Install-state fix V3
+- Tombol Install hanya tampil saat aplikasi belum terpasang.
+- Setelah event `appinstalled`, status tersimpan dan CTA Install langsung hilang.
+- Saat aplikasi dibuka dari Home Screen dalam `standalone`, CTA Install selalu disembunyikan.
+- Jika aplikasi di-uninstall dan browser kembali menawarkan `beforeinstallprompt`, marker lama otomatis dibersihkan.

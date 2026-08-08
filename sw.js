@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ost-tracker-shell-v2';
+const CACHE_NAME = 'ost-tracker-shell-v3-install-state';
 const APP_SHELL = [
   '/',
   '/index.html',
