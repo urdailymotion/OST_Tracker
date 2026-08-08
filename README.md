@@ -14,3 +14,12 @@ Upload/replace semua file dalam paket ini. Setelah commit, tunggu deployment Ver
 6. Setelah berhasil, buka OST Tracker dari ikon launcher. Tombol Install akan disembunyikan pada mode standalone / setelah event appinstalled.
 
 Jika pernah membuka versi lama, hapus data situs/cache untuk domain Vercel atau uninstall shortcut lama sebelum pengujian ulang agar service worker/manifest lama tidak tertahan.
+
+
+## Update v5
+- Tombol **Buka Langsung** disembunyikan pada komputer/laptop.
+- Tombol tersebut hanya ditampilkan pada perangkat mobile/touch phone-class.
+- Alur instalasi PWA tidak diubah.
+
+
+Update V6: tombol **Buka Langsung** sekarang hanya tampil pada perangkat kelas HP; tablet/iPad dan desktop/laptop tidak menampilkannya.

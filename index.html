@@ -14,7 +14,7 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="/favicon.png">
   <title>OST Tracker | Outstanding Backlog & Vendor ETA</title>
-  <meta name="ost-pwa-version" content="webapk-flat-fix-v4">
+  <meta name="ost-pwa-version" content="webapk-flat-fix-v6-phone-only-direct">
   <style>
     :root{--primary:#991b1b;--primary2:#dc2626;--navy:#071326;--surface:#fff;--ink:#172033;--muted:#64748b}
     *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--navy);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -22,10 +22,10 @@
     .loading{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:#fff;background:radial-gradient(circle at top,#17375f 0%,#071326 55%,#040b16 100%);transition:.25s}
     .loading.hide{opacity:0;visibility:hidden;pointer-events:none}.brand{width:78px;height:78px;border-radius:22px;background:#fff url('/icon-192.png') center/cover no-repeat;box-shadow:0 16px 40px rgba(0,0,0,.28)}
     .loading strong{font-size:18px}.loading small{font-size:12px;color:#b9c8d9}.spinner{width:30px;height:30px;border:3px solid rgba(255,255,255,.22);border-top-color:#fff;border-radius:50%;animation:spin .72s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-    .app-actions{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:8;display:flex;gap:8px;align-items:center}.app-btn{appearance:none;border:0;border-radius:12px;padding:11px 14px;text-decoration:none;font:800 12px/1 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 26px rgba(0,0,0,.22);cursor:pointer}.install{display:inline-flex;background:linear-gradient(135deg,var(--primary),var(--primary2));color:#fff}.open{background:#111827;color:#fff}
+    .app-actions{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:8;display:flex;gap:8px;align-items:center}.app-btn{appearance:none;border:0;border-radius:12px;padding:11px 14px;text-decoration:none;font:800 12px/1 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 26px rgba(0,0,0,.22);cursor:pointer}.install{display:inline-flex;background:linear-gradient(135deg,var(--primary),var(--primary2));color:#fff}.open{display:none;background:#111827;color:#fff}
     .modal-bg{display:none;position:fixed;inset:0;z-index:30;background:rgba(2,6,23,.72);align-items:center;justify-content:center;padding:20px}.modal-bg.show{display:flex}.modal{width:min(440px,100%);background:#fff;color:#172033;border-radius:22px;padding:22px;box-shadow:0 28px 80px rgba(0,0,0,.35)}.modal h2{font-size:20px;margin:0 0 9px}.modal p{font-size:13px;line-height:1.55;color:#64748b;margin:0 0 12px}.steps{background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:13px;font-size:13px;line-height:1.7;margin:12px 0}.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}.modal-actions button{border:0;border-radius:11px;padding:10px 13px;font-weight:800;cursor:pointer}.close{background:#e2e8f0;color:#334155}.retry{background:#991b1b;color:#fff}
     .installed-badge{display:none;background:#166534;color:#fff}.installed-badge.show{display:inline-flex}.offline-card{display:none;position:fixed;inset:0;z-index:7;align-items:center;justify-content:center;padding:24px;background:var(--navy);color:#fff;text-align:center}.offline-card.show{display:flex}.offline-card>div{max-width:430px}.offline-card h1{font-size:23px;margin:0 0 10px}.offline-card p{font-size:13px;color:#b9c8d9;line-height:1.6;margin:0 0 18px}
-    @media(max-width:640px){.open{display:none}.app-actions{right:10px;bottom:calc(10px + env(safe-area-inset-bottom))}.app-btn{min-height:44px;padding:12px 15px}.brand{width:70px;height:70px}}
+    @media(max-width:640px){.app-actions{right:10px;bottom:calc(10px + env(safe-area-inset-bottom))}.app-btn{min-height:44px;padding:12px 15px}.brand{width:70px;height:70px}}
   </style>
 </head>
 <body>
@@ -39,7 +39,7 @@
   <div class="app-actions">
     <button id="installBtn" class="app-btn install" type="button">⬇ Install App</button>
     <span id="installedBadge" class="app-btn installed-badge">✓ Terpasang</span>
-    <a class="app-btn open" href="https://script.google.com/a/macros/ppa.co.id/s/AKfycbwOBh2oIWsOhqLYvOIRpE52h3hkaBQ_Q0HIDTUC0JcKPAmgY7iWJhyqRKQ4kuCwOIRblA/exec" target="_blank" rel="noopener">Buka Langsung</a>
+    <a id="openDirectBtn" class="app-btn open" href="https://script.google.com/a/macros/ppa.co.id/s/AKfycbwOBh2oIWsOhqLYvOIRpE52h3hkaBQ_Q0HIDTUC0JcKPAmgY7iWJhyqRKQ4kuCwOIRblA/exec" target="_blank" rel="noopener">Buka Langsung</a>
   </div>
 
   <div id="installHelp" class="modal-bg" role="dialog" aria-modal="true">
@@ -61,6 +61,25 @@
     function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone===true}
     function isIOS(){return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)}
     function isAndroid(){return /android/i.test(navigator.userAgent)}
+    function isPhoneDevice(){
+      // Buka Langsung hanya untuk HP. Tablet/iPad dan desktop sengaja dikecualikan.
+      try{
+        if(navigator.userAgentData && typeof navigator.userAgentData.mobile==='boolean'){
+          return navigator.userAgentData.mobile===true;
+        }
+      }catch(e){}
+      const ua=String(navigator.userAgent||'');
+      if(/iPad|Tablet|Nexus 7|Nexus 9|Nexus 10|SM-T|Tab/i.test(ua))return false;
+      if(/iPhone|iPod|Windows Phone|IEMobile|Opera Mini/i.test(ua))return true;
+      // Android phone umumnya memiliki token "Mobile"; Android tablet umumnya tidak.
+      if(/Android/i.test(ua))return /Mobile/i.test(ua);
+      if(/Mobile/i.test(ua))return true;
+      // Fallback untuk browser yang menyamarkan UA: batasi ke ukuran fisik kelas HP.
+      const shortSide=Math.min(Number(screen.width)||9999,Number(screen.height)||9999);
+      return navigator.maxTouchPoints>1 && shortSide<=600;
+    }
+    const openDirectBtn=document.getElementById('openDirectBtn');
+    if(openDirectBtn) openDirectBtn.style.display=isPhoneDevice()?'inline-flex':'none';
     function getInstalledFlag(){try{return localStorage.getItem(INSTALL_FLAG)==='1'}catch(e){return false}}
     function setInstalledFlag(value){try{value?localStorage.setItem(INSTALL_FLAG,'1'):localStorage.removeItem(INSTALL_FLAG)}catch(e){}}
     function isInstalled(){return isStandalone() || getInstalledFlag()}
