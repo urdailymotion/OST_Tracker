@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ost-tracker-shell-v4-webapk-flat';
+const CACHE_NAME = 'ost-tracker-shell-v5-no-direct-button';
 const CORE_ASSETS = [
   '/',
   '/manifest.webmanifest',

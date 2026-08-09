@@ -23,3 +23,9 @@ Jika pernah membuka versi lama, hapus data situs/cache untuk domain Vercel atau 
 
 
 Update V6: tombol **Buka Langsung** sekarang hanya tampil pada perangkat kelas HP; tablet/iPad dan desktop/laptop tidak menampilkannya.
+
+
+## Update V7
+- Fitur/tombol **Buka Langsung** dihapus dari shell PWA, termasuk saat aplikasi dibuka dari HP.
+- Tombol **Install App** dan mekanisme PWA tetap dipertahankan.
+- Cache service worker dinaikkan versinya agar tampilan lama tidak tertahan di perangkat.
