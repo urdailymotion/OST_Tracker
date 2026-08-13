@@ -89,7 +89,7 @@
       if(isStandalone()){updateInstallUi();return}
       if(deferredPrompt){
         deferredPrompt.prompt();
-        const choice=await deferredPrompt.userChoice.catch(()=>null);
+        const choice=await deferredPrompt.userChoice.catch(err=>{console.warn('Prompt install gagal:',err&&err.message||err);return null});
         if(choice&&choice.outcome==='accepted'){deferredPrompt=null;updateInstallUi();return}
         deferredPrompt=null;
       }
@@ -97,7 +97,7 @@
     }
     installBtn.addEventListener('click',requestInstall);document.getElementById('retryInstall').addEventListener('click',()=>{installHelp.classList.remove('show');setTimeout(requestInstall,100)});document.getElementById('closeHelp').addEventListener('click',()=>installHelp.classList.remove('show'));installHelp.addEventListener('click',e=>{if(e.target===installHelp)installHelp.classList.remove('show')});
 
-    if('serviceWorker' in navigator){window.addEventListener('load',async()=>{try{const reg=await navigator.serviceWorker.register('/sw.js',{scope:'/'});reg.update().catch(()=>{})}catch(err){console.warn('Service worker:',err)}})}
+    if('serviceWorker' in navigator){window.addEventListener('load',async()=>{try{const reg=await navigator.serviceWorker.register('/sw.js',{scope:'/'});reg.update().catch(err=>console.warn('Service worker update:',err&&err.message||err))}catch(err){console.error('Service worker gagal didaftarkan:',err&&err.message||err,err)}})}
   </script>
 </body>
 </html>
