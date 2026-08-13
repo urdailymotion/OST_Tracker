@@ -150,16 +150,8 @@ function doGet() {
 
 /** Run once from Apps Script editor. */
 function setupSystem() {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(120000);
-  try {
-    const ss = getSpreadsheet_();
-    ensureSheet_(ss, CONFIG.SHEETS.DB, CONFIG.DB_HEADERS);
-    ensureSheet_(ss, CONFIG.SHEETS.PARENT, CONFIG.PARENT_HEADERS);
-    ensureSheet_(ss, CONFIG.SHEETS.USERS, CONFIG.USERS_HEADERS);
-    ensureSheet_(ss, CONFIG.SHEETS.HISTORY, CONFIG.HISTORY_HEADERS);
-    ensureSheet_(ss, CONFIG.SHEETS.NOTIFICATIONS, CONFIG.NOTIFICATION_HEADERS);
-    ensureSheet_(ss, CONFIG.SHEETS.SETTINGS, CONFIG.SETTINGS_HEADERS);
+  return withScriptLock_(120000, function() {
+    const ss = ensureSheets_();
     ensureSettings_();
     ensureAdmin_();
     const credentialMigration = migrateCredentialsToPlainTextOnce_();
@@ -180,9 +172,7 @@ function setupSystem() {
       parentSync: parentSync,
       appVersion: CONFIG.APP_VERSION
     };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function login(username, password) {
@@ -324,13 +314,12 @@ function logout(token) {
 /** Daftar akun aktif untuk fitur pencarian username pada halaman login. */
 function getLoginUserOptions() {
   ensureSystem_();
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
+  const users = readUsersTable_();
+  const values = users.values;
   if (values.length < 2) return [];
-  const headers = values[0];
-  const idx = indexMap_(headers);
+  const idx = users.idx;
   return values.slice(1)
-    .filter(r => r.some(v => v !== '' && v !== null) && toBoolean_(r[idx.ACTIVE]))
+    .filter(r => rowHasValue_(r) && toBoolean_(r[idx.ACTIVE]))
     .map(r => ({
       username: String(r[idx.USERNAME] || ''),
       role: String(r[idx.ROLE] || 'VENDOR').toUpperCase(),
@@ -520,41 +509,28 @@ function getOutstanding(token, params) {
     const rowReleaseState = parentReleaseState_(o);
     if (releaseState && rowReleaseState !== releaseState) return false;
 
-    const eta = parseDate_(o[PCOL.ETA]);
-    const statusText = parentStatusLabel_(o);
-    const hasUpdate = parentHasUpdate_(o);
-    if (etaState === 'PENDING_UPDATE' && hasUpdate) return false;
-    if (etaState === 'UPDATED' && !hasUpdate) return false;
-    if (etaState === 'NO_ETA' && eta) return false;
-    if (etaState === 'OVERDUE' && (!eta || stripTime_(eta) >= today || isDeliveredStatus_(statusText))) return false;
-    if (etaState === 'NEXT_7_DAYS') {
-      if (!eta) return false;
-      const diff = Math.ceil((stripTime_(eta).getTime() - today.getTime()) / 86400000);
-      if (diff < 0 || diff > 7 || isDeliveredStatus_(statusText)) return false;
-    }
+    const etaOk = matchesEtaState_(etaState, {
+      eta: parseDate_(o[PCOL.ETA]),
+      statusText: parentStatusLabel_(o),
+      hasUpdate: parentHasUpdate_(o),
+      today: today
+    });
+    if (!etaOk) return false;
 
-    if (search) {
-      const hay = [
-        o[PCOL.PO], o[PCOL.VENDOR_CODE], o[PCOL.VENDOR_NAME],
-        o[PCOL.RELEASE], rowReleaseState, o[PCOL.ETD],
-        o[PCOL.STATUS], o[PCOL.NOTE], o[PCOL.SEARCH]
-      ].join(' ').toLowerCase();
-      if (hay.indexOf(search) < 0) return false;
-    }
-    return true;
+    return matchesSearch_([
+      o[PCOL.PO], o[PCOL.VENDOR_CODE], o[PCOL.VENDOR_NAME],
+      o[PCOL.RELEASE], rowReleaseState, o[PCOL.ETD],
+      o[PCOL.STATUS], o[PCOL.NOTE], o[PCOL.SEARCH]
+    ], search);
   });
 
   const sortKey = String(params.sortKey || 'LAST_UPDATE');
   const sortDir = String(params.sortDir || 'desc').toLowerCase() === 'asc' ? 1 : -1;
   rows.sort(function(a, b) { return compareParentRows_(a.obj, b.obj, sortKey) * sortDir; });
 
-  const pageSize = Math.min(100, Math.max(10, Number(params.pageSize || 25)));
-  const total = rows.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const page = Math.min(totalPages, Math.max(1, Number(params.page || 1)));
-  const start = (page - 1) * pageSize;
-  const paged = rows.slice(start, start + pageSize).map(function(r) { return parentRowToClient_(r); });
-  return { rows: paged, total: total, page: page, pageSize: pageSize, totalPages: totalPages, dataType: 'PARENT_PO' };
+  const result = paginate_(rows, params, parentRowToClient_);
+  result.dataType = 'PARENT_PO';
+  return result;
 }
 
 function getRecordDetail(token, recordId) {
@@ -641,9 +617,7 @@ function updateVendorRecord(token, payload) {
 
 function deleteOutstandingRecord(token, recordId) {
   const session = requireAdmin_(token);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(120000);
-  try {
+  return withScriptLock_(120000, function() {
     ensureParentData_();
     const resolved = resolveParentRecord_(recordId);
     if (!resolved || !resolved.parent) throw new Error('PO tidak ditemukan.');
@@ -662,9 +636,7 @@ function deleteOutstandingRecord(token, recordId) {
       ok: true,
       message: 'PO ' + String(parentObj[PCOL.PO] || '') + ' beserta ' + resolved.children.length + ' line item berhasil dihapus.'
     };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function importExcelData(token, payload) {
@@ -685,17 +657,14 @@ function importExcelData(token, payload) {
     if (sourceMap[required] === undefined) throw new Error('Kolom wajib tidak ditemukan: ' + required);
   });
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(120000);
-  try {
+  return withScriptLock_(120000, function() {
     const ss = getSpreadsheet_();
     const sheet = ss.getSheetByName(CONFIG.SHEETS.DB);
     const existing = readDb_();
     const preserveMap = {};
     if (mode === 'PRESERVE') {
       existing.rows.forEach(function(r) {
-        const hasUpdate = Boolean(r.obj[COL.LAST_UPDATE]) || Boolean(String(r.obj[COL.UPDATED_BY] || '').trim()) || number_(r.obj[COL.REVISION]) > 0;
-        if (hasUpdate) preserveMap[String(r.obj[COL.ID])] = r.obj;
+        if (hasUpdateTrace_(r.obj, COL)) preserveMap[String(r.obj[COL.ID])] = r.obj;
       });
     }
 
@@ -751,9 +720,7 @@ function importExcelData(token, payload) {
       skippedRows: skippedRows,
       newCredentials: newCredentials
     };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function getAdminNotificationSummary(token) {
@@ -784,9 +751,8 @@ function getAdminNotifications(token, params) {
   if (search) {
     rows = rows.filter(r => {
       const o = r.obj;
-      return [o.VENDOR_CODE, o.VENDOR_NAME, o.USERNAME, o.PO, o.ITEM, o.PART_NUMBER,
-        o.CHANGE_TYPES, o.CHANGE_SUMMARY, o.NEW_SOURCE, o.NEW_ETD, o.NEW_STATUS, o.NEW_NOTE]
-        .join(' ').toLowerCase().indexOf(search) >= 0;
+      return matchesSearch_([o.VENDOR_CODE, o.VENDOR_NAME, o.USERNAME, o.PO, o.ITEM, o.PART_NUMBER,
+        o.CHANGE_TYPES, o.CHANGE_SUMMARY, o.NEW_SOURCE, o.NEW_ETD, o.NEW_STATUS, o.NEW_NOTE], search);
     });
   }
 
@@ -805,35 +771,19 @@ function getAdminNotifications(token, params) {
     etaChanges: rows.filter(r => String(r.obj.CHANGE_TYPES || '').split(',').indexOf('ETA') >= 0).length
   };
 
-  const pageSize = Math.min(100, Math.max(10, Number(params.pageSize || 25)));
-  const total = rows.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const page = Math.min(totalPages, Math.max(1, Number(params.page || 1)));
-  const start = (page - 1) * pageSize;
-  return {
-    rows: rows.slice(start, start + pageSize).map(r => notificationToClient_(r.obj, session.userId)),
-    summary: summary,
-    total: total,
-    page: page,
-    pageSize: pageSize,
-    totalPages: totalPages
-  };
+  const result = paginate_(rows, params, r => notificationToClient_(r.obj, session.userId));
+  result.summary = summary;
+  return result;
 }
 
 function markNotificationRead(token, notificationId) {
   const session = requireAdmin_(token);
-  const sheet = ensureSheet_(getSpreadsheet_(), CONFIG.SHEETS.NOTIFICATIONS, CONFIG.NOTIFICATION_HEADERS);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) throw new Error('Notifikasi tidak ditemukan.');
-  const headers = values[0];
-  const idx = indexMap_(headers);
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][idx.NOTIFICATION_ID] || '') !== String(notificationId || '')) continue;
-    const next = addNotificationReader_(values[i][idx.READ_BY], session.userId);
-    sheet.getRange(i + 1, idx.READ_BY + 1).setValue(next);
-    return { ok: true, message: 'Notifikasi ditandai sudah dibaca.' };
-  }
-  throw new Error('Notifikasi tidak ditemukan.');
+  const table = readNotificationsTable_();
+  const row = findTableRow_(table, 'NOTIFICATION_ID', notificationId);
+  if (!row) throw new Error('Notifikasi tidak ditemukan.');
+  const next = addNotificationReader_(row.obj.READ_BY, session.userId);
+  table.sheet.getRange(row.rowNumber, table.idx.READ_BY + 1).setValue(next);
+  return { ok: true, message: 'Notifikasi ditandai sudah dibaca.' };
 }
 
 function markAllNotificationsRead(token, params) {
@@ -862,38 +812,17 @@ function markAllNotificationsRead(token, params) {
 function getHistory(token, params) {
   const session = requireSession_(token);
   params = params || {};
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.HISTORY);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return { rows: [], total: 0, page: 1, totalPages: 1, pageSize: 25 };
-  const headers = values[0];
-  const idx = indexMap_(headers);
   const search = String(params.search || '').trim().toLowerCase();
   const action = String(params.action || '').trim();
-  let rows = [];
-  for (let i = 1; i < values.length; i++) {
-    const o = objectFromRow_(headers, values[i]);
-    if (toBoolean_(o.IS_DELETED)) continue;
-    if (session.role !== 'ADMIN' && String(o.VENDOR_CODE || '') !== String(session.vendorCode || '')) continue;
-    if (action && String(o.ACTION || '') !== action) continue;
-    if (search) {
-      const hay = [o.PO, o.ITEM, o.PART_NUMBER, o.USERNAME, o.NEW_SOURCE, o.NEW_STATUS, o.NEW_ETD, o.NEW_NOTE].join(' ').toLowerCase();
-      if (hay.indexOf(search) < 0) continue;
-    }
-    rows.push({ rowNumber: i + 1, obj: o });
-  }
+  const rows = readSheetTable_(CONFIG.SHEETS.HISTORY, CONFIG.HISTORY_HEADERS).rows.filter(r => {
+    const o = r.obj;
+    if (toBoolean_(o.IS_DELETED)) return false;
+    if (session.role !== 'ADMIN' && String(o.VENDOR_CODE || '') !== String(session.vendorCode || '')) return false;
+    if (action && String(o.ACTION || '') !== action) return false;
+    return matchesSearch_([o.PO, o.ITEM, o.PART_NUMBER, o.USERNAME, o.NEW_SOURCE, o.NEW_STATUS, o.NEW_ETD, o.NEW_NOTE], search);
+  });
   rows.sort((a, b) => dateTimeMs_(b.obj.TIMESTAMP) - dateTimeMs_(a.obj.TIMESTAMP));
-  const pageSize = Math.min(100, Math.max(10, Number(params.pageSize || 25)));
-  const total = rows.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const page = Math.min(totalPages, Math.max(1, Number(params.page || 1)));
-  const start = (page - 1) * pageSize;
-  return {
-    rows: rows.slice(start, start + pageSize).map(r => historyToClient_(r.obj)),
-    total: total,
-    page: page,
-    pageSize: pageSize,
-    totalPages: totalPages
-  };
+  return paginate_(rows, params, r => historyToClient_(r.obj));
 }
 
 function getHistoryDetail(token, historyId) {
@@ -916,7 +845,7 @@ function editHistory(token, payload) {
   const sheet = found.sheet;
   const headers = found.headers;
   const idx = found.idx;
-  const row = found.values.slice();
+  const row = padRowToHeaders_(found.values, headers.length);
   row[idx.NEW_ETA] = payload.eta ? parseDateInput_(payload.eta) : '';
   row[idx.NEW_SOURCE] = String(payload.sourceStock || '').trim();
   row[idx.NEW_ETD] = String(payload.etd || '').trim();
@@ -946,9 +875,7 @@ function editHistory(token, payload) {
 
 function deleteHistory(token, historyId) {
   const session = requireAdmin_(token);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try {
+  return withScriptLock_(30000, function() {
     const found = findHistory_(historyId);
     if (!found) throw new Error('Riwayat tidak ditemukan.');
     if (toBoolean_(found.obj.IS_DELETED)) return { ok: true, message: 'Riwayat sudah dihapus.' };
@@ -980,19 +907,17 @@ function deleteHistory(token, historyId) {
       }
     }
     return { ok: true, message: 'Riwayat berhasil dihapus.' };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function getUsers(token) {
   requireAdmin_(token);
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
+  const users = readUsersTable_();
+  const values = users.values;
   if (values.length < 2) return [];
-  const headers = values[0];
+  const headers = users.headers;
   return values.slice(1)
-    .filter(r => r.some(v => v !== '' && v !== null))
+    .filter(rowHasValue_)
     .map(r => {
       const o = objectFromRow_(headers, r);
       return {
@@ -1021,10 +946,11 @@ function saveUser(token, payload) {
   }
   if (!username) throw new Error('Username wajib diisi.');
 
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idx = indexMap_(headers);
+  const users = readUsersTable_();
+  const sheet = users.sheet;
+  const values = users.values;
+  const headers = users.headers;
+  const idx = users.idx;
   const targetId = String(payload.userId || '');
   let targetRow = -1;
   for (let i = 1; i < values.length; i++) {
@@ -1050,24 +976,19 @@ function saveUser(token, payload) {
     }
     sheet.getRange(targetRow + 1, 1, 1, headers.length).setValues([row]);
   } else {
-    const userId = Utilities.getUuid();
     const password = String(payload.password || (role === 'ADMIN'
       ? CONFIG.DEFAULT_ADMIN.password
       : defaultVendorPassword_(String(payload.vendorCode || ''), String(payload.vendorName || ''))));
-    const obj = {
-      USER_ID: userId,
-      USERNAME: username,
-      PASSWORD_HASH: password,
-      ROLE: role,
-      VENDOR_CODE: role === 'VENDOR' ? String(payload.vendorCode || '') : '',
-      VENDOR_NAME: role === 'VENDOR' ? String(payload.vendorName || '') : '',
-      ACTIVE: payload.active !== false,
-      MUST_CHANGE: false,
-      LAST_LOGIN: '',
-      CREATED_AT: now,
-      UPDATED_AT: now
-    };
-    sheet.appendRow(headers.map(h => obj[h] === undefined ? '' : obj[h]));
+    const obj = newUserRecord_({
+      username: username,
+      password: password,
+      role: role,
+      vendorCode: role === 'VENDOR' ? String(payload.vendorCode || '') : '',
+      vendorName: role === 'VENDOR' ? String(payload.vendorName || '') : '',
+      active: payload.active !== false,
+      now: now
+    });
+    sheet.appendRow(rowValuesFromObject_(headers, obj));
   }
   appendSystemHistory_(session, 'SAVE_USER', username);
   return { ok: true, message: 'User berhasil disimpan.' };
@@ -1075,10 +996,10 @@ function saveUser(token, payload) {
 
 function resetUserPassword(token, userId) {
   const session = requireAdmin_(token);
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idx = indexMap_(headers);
+  const users = readUsersTable_();
+  const sheet = users.sheet;
+  const values = users.values;
+  const idx = users.idx;
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][idx.USER_ID] || '') !== String(userId)) continue;
     const role = String(values[i][idx.ROLE] || 'VENDOR').toUpperCase();
@@ -1099,9 +1020,10 @@ function resetUserPassword(token, userId) {
 function deleteUser(token, userId) {
   const session = requireAdmin_(token);
   if (String(session.userId) === String(userId)) throw new Error('Akun yang sedang digunakan tidak dapat dihapus.');
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
-  const idx = indexMap_(values[0]);
+  const users = readUsersTable_();
+  const sheet = users.sheet;
+  const values = users.values;
+  const idx = users.idx;
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][idx.USER_ID] || '') === String(userId)) {
       const username = String(values[i][idx.USERNAME] || '');
@@ -1137,10 +1059,10 @@ function changePassword(token, oldPassword, newPassword) {
   oldPassword = String(oldPassword || '');
   newPassword = String(newPassword || '');
   if (newPassword.length < 8) throw new Error('Password baru minimal 8 karakter.');
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idx = indexMap_(headers);
+  const users = readUsersTable_();
+  const sheet = users.sheet;
+  const values = users.values;
+  const idx = users.idx;
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][idx.USER_ID] || '') !== String(session.userId)) continue;
     const storedPassword = String(values[i][idx.PASSWORD_HASH] || '');
@@ -1160,6 +1082,12 @@ function changePassword(token, oldPassword, newPassword) {
 // ========================= INTERNAL: SYSTEM =========================
 
 function ensureSystem_() {
+  ensureSheets_();
+  ensureAdmin_();
+}
+
+/** Membuat/menyelaraskan seluruh sheet beserta headernya. */
+function ensureSheets_() {
   const ss = getSpreadsheet_();
   ensureSheet_(ss, CONFIG.SHEETS.DB, CONFIG.DB_HEADERS);
   ensureSheet_(ss, CONFIG.SHEETS.PARENT, CONFIG.PARENT_HEADERS);
@@ -1167,7 +1095,7 @@ function ensureSystem_() {
   ensureSheet_(ss, CONFIG.SHEETS.HISTORY, CONFIG.HISTORY_HEADERS);
   ensureSheet_(ss, CONFIG.SHEETS.NOTIFICATIONS, CONFIG.NOTIFICATION_HEADERS);
   ensureSheet_(ss, CONFIG.SHEETS.SETTINGS, CONFIG.SETTINGS_HEADERS);
-  ensureAdmin_();
+  return ss;
 }
 
 function getSpreadsheet_() {
@@ -1208,28 +1136,15 @@ function ensureSettings_() {
 }
 
 function ensureAdmin_() {
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idx = indexMap_(headers);
-  const exists = values.slice(1).some(r => String(r[idx.ROLE] || '').toUpperCase() === 'ADMIN');
+  const users = readUsersTable_();
+  const exists = users.values.slice(1).some(r => String(r[users.idx.ROLE] || '').toUpperCase() === 'ADMIN');
   if (exists) return;
-  const now = new Date();
-  const userId = Utilities.getUuid();
-  const obj = {
-    USER_ID: userId,
-    USERNAME: CONFIG.DEFAULT_ADMIN.username,
-    PASSWORD_HASH: CONFIG.DEFAULT_ADMIN.password,
-    ROLE: 'ADMIN',
-    VENDOR_CODE: '',
-    VENDOR_NAME: '',
-    ACTIVE: true,
-    MUST_CHANGE: false,
-    LAST_LOGIN: '',
-    CREATED_AT: now,
-    UPDATED_AT: now
-  };
-  sheet.appendRow(headers.map(h => obj[h] === undefined ? '' : obj[h]));
+  const obj = newUserRecord_({
+    username: CONFIG.DEFAULT_ADMIN.username,
+    password: CONFIG.DEFAULT_ADMIN.password,
+    role: 'ADMIN'
+  });
+  users.sheet.appendRow(rowValuesFromObject_(users.headers, obj));
 }
 
 function ensurePhotoFolder_() {
@@ -1254,11 +1169,7 @@ function formatAllSheets_() {
     const sh = ss.getSheetByName(name);
     if (!sh) return;
     sh.setFrozenRows(1);
-    if (sh.getLastColumn()) {
-      sh.getRange(1, 1, 1, sh.getLastColumn())
-        .setBackground('#7f1d1d').setFontColor('#ffffff').setFontWeight('bold')
-        .setHorizontalAlignment('center').setVerticalAlignment('middle');
-    }
+    formatSheetHeader_(sh, sh.getLastColumn(), '#7f1d1d', false);
   });
 }
 
@@ -1266,40 +1177,25 @@ function formatDbSheet_(sheet, lastRow) {
   sheet.setFrozenRows(1);
   sheet.setFrozenColumns(3);
   const lastCol = CONFIG.DB_HEADERS.length;
-  sheet.getRange(1, 1, 1, lastCol)
-    .setBackground('#7f1d1d').setFontColor('#ffffff').setFontWeight('bold')
-    .setHorizontalAlignment('center').setVerticalAlignment('middle').setWrap(true);
+  formatSheetHeader_(sheet, lastCol, '#7f1d1d', true);
   sheet.setRowHeight(1, 42);
-  if (lastRow > 1) {
-    const idx = indexMap_(CONFIG.DB_HEADERS);
-    sheet.getRange(2, idx[COL.AGING] + 1, lastRow - 1, 1).setNumberFormat('0');
-    sheet.getRange(2, idx[COL.FULL_RELEASE_DATE] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy');
-    sheet.getRange(2, idx[COL.TARGET_SUPPLY] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy');
-    sheet.getRange(2, idx[COL.DOC_DATE] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy');
-    sheet.getRange(2, idx[COL.ETA] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy');
-    sheet.getRange(2, idx[COL.NET_PRICE] + 1, lastRow - 1, 2).setNumberFormat('#,##0');
-    sheet.getRange(2, idx[COL.LAST_UPDATE] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy HH:mm');
-  }
-  const widths = [75,125,115,110,110,110,70,100,130,280,100,90,70,120,130,80,130,260,120,100,260,150,220,110,220,220,250,160,140,120,100,80,190];
-  widths.forEach((w, i) => sheet.setColumnWidth(i + 1, w));
-  if (sheet.getFilter()) sheet.getFilter().remove();
-  if (lastRow >= 1) sheet.getRange(1, 1, Math.max(lastRow, 1), lastCol).createFilter();
+  applyColumnFormats_(sheet, CONFIG.DB_HEADERS, lastRow, [
+    { column: COL.AGING, format: '0' },
+    { column: COL.FULL_RELEASE_DATE, format: 'dd/MM/yyyy' },
+    { column: COL.TARGET_SUPPLY, format: 'dd/MM/yyyy' },
+    { column: COL.DOC_DATE, format: 'dd/MM/yyyy' },
+    { column: COL.ETA, format: 'dd/MM/yyyy' },
+    { column: COL.NET_PRICE, format: '#,##0', span: 2 },
+    { column: COL.LAST_UPDATE, format: 'dd/MM/yyyy HH:mm' }
+  ]);
+  applyColumnWidths_(sheet, [75,125,115,110,110,110,70,100,130,280,100,90,70,120,130,80,130,260,120,100,260,150,220,110,220,220,250,160,140,120,100,80,190]);
+  refreshSheetFilter_(sheet, lastRow, lastCol);
 }
 
 // ========================= INTERNAL: DATABASE =========================
 
 function readDb_() {
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.DB);
-  const values = sheet.getDataRange().getValues();
-  const headers = values.length ? values[0] : CONFIG.DB_HEADERS;
-  const idx = indexMap_(headers);
-  const rows = [];
-  for (let i = 1; i < values.length; i++) {
-    if (!values[i].some(v => v !== '' && v !== null)) continue;
-    const obj = objectFromRow_(headers, values[i]);
-    rows.push({ rowNumber: i + 1, values: values[i], obj: obj });
-  }
-  return { sheet: sheet, headers: headers, idx: idx, rows: rows };
+  return readSheetTable_(CONFIG.SHEETS.DB, CONFIG.DB_HEADERS);
 }
 
 function rowToClient_(r) {
@@ -1365,25 +1261,19 @@ function filterRows_(rows, session, filters) {
     if (etaState) {
       // Kondisi ETA hanya relevan untuk item yang sudah Release dan dapat ditindaklanjuti vendor.
       if (!isReleasedRow_(o)) return false;
-      const eta = parseDate_(o[COL.ETA]);
-      const statusText = statusLabel_(o);
-      if (etaState === 'PENDING_UPDATE' && o[COL.LAST_UPDATE]) return false;
-      if (etaState === 'UPDATED' && !o[COL.LAST_UPDATE]) return false;
-      if (etaState === 'NO_ETA' && eta) return false;
-      if (etaState === 'OVERDUE' && (!eta || stripTime_(eta) >= today || isDeliveredStatus_(statusText))) return false;
-      if (etaState === 'NEXT_7_DAYS') {
-        if (!eta) return false;
-        const diff = Math.ceil((stripTime_(eta).getTime() - today.getTime()) / 86400000);
-        if (diff < 0 || diff > 7 || isDeliveredStatus_(statusText)) return false;
-      }
+      const etaOk = matchesEtaState_(etaState, {
+        eta: parseDate_(o[COL.ETA]),
+        statusText: statusLabel_(o),
+        hasUpdate: Boolean(o[COL.LAST_UPDATE]),
+        today: today
+      });
+      if (!etaOk) return false;
     }
 
-    if (search) {
-      const hay = [o[COL.WO], o[COL.PO], o[COL.ITEM], o[COL.PART], o[COL.DESC], o[COL.VENDOR], o[COL.ETD], o[COL.STATUS]]
-        .join(' ').toLowerCase();
-      if (hay.indexOf(search) < 0) return false;
-    }
-    return true;
+    return matchesSearch_(
+      [o[COL.WO], o[COL.PO], o[COL.ITEM], o[COL.PART], o[COL.DESC], o[COL.VENDOR], o[COL.ETD], o[COL.STATUS]],
+      search
+    );
   });
 }
 
@@ -1578,17 +1468,13 @@ function historyToClient_(o) {
 }
 
 function findHistory_(historyId) {
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.HISTORY);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return null;
-  const headers = values[0];
-  const idx = indexMap_(headers);
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][idx.HISTORY_ID] || '') === String(historyId)) {
-      return { sheet: sheet, headers: headers, idx: idx, values: values[i], rowNumber: i + 1, obj: objectFromRow_(headers, values[i]) };
-    }
-  }
-  return null;
+  const table = readSheetTable_(CONFIG.SHEETS.HISTORY, CONFIG.HISTORY_HEADERS);
+  const match = findTableRow_(table, 'HISTORY_ID', historyId);
+  if (!match) return null;
+  return {
+    sheet: table.sheet, headers: table.headers, idx: table.idx,
+    values: match.values, rowNumber: match.rowNumber, obj: match.obj
+  };
 }
 
 function isLatestActiveHistory_(recordId, historyId) {
@@ -1597,20 +1483,14 @@ function isLatestActiveHistory_(recordId, historyId) {
 }
 
 function latestActiveHistoryForRecord_(recordId) {
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.HISTORY);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return null;
-  const headers = values[0];
-  const idx = indexMap_(headers);
   let latest = null;
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][idx.RECORD_ID] || '') !== String(recordId)) continue;
-    if (toBoolean_(values[i][idx.IS_DELETED])) continue;
-    const obj = objectFromRow_(headers, values[i]);
-    if (!latest || dateTimeMs_(obj.TIMESTAMP) >= dateTimeMs_(latest.obj.TIMESTAMP)) {
-      latest = { rowNumber: i + 1, obj: obj };
+  readSheetTable_(CONFIG.SHEETS.HISTORY, CONFIG.HISTORY_HEADERS).rows.forEach(function(r) {
+    if (String(r.obj.RECORD_ID || '') !== String(recordId)) return;
+    if (toBoolean_(r.obj.IS_DELETED)) return;
+    if (!latest || dateTimeMs_(r.obj.TIMESTAMP) >= dateTimeMs_(latest.obj.TIMESTAMP)) {
+      latest = { rowNumber: r.rowNumber, obj: r.obj };
     }
-  }
+  });
   return latest;
 }
 
@@ -1702,16 +1582,7 @@ function syncVendorNotificationsFromHistory_() {
 }
 
 function readNotificationRows_() {
-  const sheet = ensureSheet_(getSpreadsheet_(), CONFIG.SHEETS.NOTIFICATIONS, CONFIG.NOTIFICATION_HEADERS);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return [];
-  const headers = values[0];
-  const rows = [];
-  for (let i = 1; i < values.length; i++) {
-    if (!values[i].some(v => v !== '' && v !== null)) continue;
-    rows.push({ rowNumber: i + 1, obj: objectFromRow_(headers, values[i]) });
-  }
-  return rows;
+  return readNotificationsTable_().rows;
 }
 
 function notificationToClient_(o, adminUserId) {
@@ -1755,41 +1626,32 @@ function notificationChangeInfo_(oldState, newState) {
 }
 
 function updateNotificationFromHistory_(historyId, oldState, newState) {
-  const sheet = ensureSheet_(getSpreadsheet_(), CONFIG.SHEETS.NOTIFICATIONS, CONFIG.NOTIFICATION_HEADERS);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return false;
-  const headers = values[0];
-  const idx = indexMap_(headers);
+  const table = readNotificationsTable_();
+  const match = findTableRow_(table, 'HISTORY_ID', historyId);
+  if (!match) return false;
   const info = notificationChangeInfo_(oldState, newState);
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][idx.HISTORY_ID] || '') !== String(historyId || '')) continue;
-    const row = values[i].slice();
-    row[idx.CHANGE_TYPES] = info.types.join(',');
-    row[idx.CHANGE_SUMMARY] = info.summary;
-    row[idx.NEW_ETA] = newState.eta || '';
-    row[idx.NEW_SOURCE] = newState.source || '';
-    row[idx.NEW_ETD] = newState.etd || '';
-    row[idx.NEW_STATUS] = newState.status || '';
-    row[idx.NEW_NOTE] = newState.note || '';
-    row[idx.PHOTO_URL] = newState.photoUrl || '';
-    sheet.getRange(i + 1, 1, 1, headers.length).setValues([row]);
-    return true;
-  }
-  return false;
+  const idx = table.idx;
+  const row = padRowToHeaders_(match.values, table.headers.length);
+  row[idx.CHANGE_TYPES] = info.types.join(',');
+  row[idx.CHANGE_SUMMARY] = info.summary;
+  row[idx.NEW_ETA] = newState.eta || '';
+  row[idx.NEW_SOURCE] = newState.source || '';
+  row[idx.NEW_ETD] = newState.etd || '';
+  row[idx.NEW_STATUS] = newState.status || '';
+  row[idx.NEW_NOTE] = newState.note || '';
+  row[idx.PHOTO_URL] = newState.photoUrl || '';
+  table.sheet.getRange(match.rowNumber, 1, 1, table.headers.length).setValues([row]);
+  return true;
 }
 
 function removeNotificationForHistory_(historyId) {
-  const sheet = ensureSheet_(getSpreadsheet_(), CONFIG.SHEETS.NOTIFICATIONS, CONFIG.NOTIFICATION_HEADERS);
-  const values = sheet.getDataRange().getValues();
-  if (values.length < 2) return false;
-  const idx = indexMap_(values[0]);
-  for (let i = values.length - 1; i >= 1; i--) {
-    if (String(values[i][idx.HISTORY_ID] || '') === String(historyId || '')) {
-      sheet.deleteRow(i + 1);
-      return true;
-    }
-  }
-  return false;
+  const table = readNotificationsTable_();
+  const matches = table.rows.filter(function(r) {
+    return String(r.obj.HISTORY_ID || '') === String(historyId || '');
+  });
+  if (!matches.length) return false;
+  table.sheet.deleteRow(matches[matches.length - 1].rowNumber);
+  return true;
 }
 
 function notificationComparable_(value) {
@@ -2111,9 +1973,7 @@ function diagnoseLoginSystemV62() {
  * memperbaiki username duplikat, dan mereset hash lama ke password default.
  */
 function repairLoginSystemV6() {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try {
+  return withScriptLock_(30000, function() {
     ensureSystem_();
     const result = repairPlainLoginRows_();
     PropertiesService.getScriptProperties().setProperty('V5_PLAIN_CREDENTIALS_MIGRATED', 'TRUE');
@@ -2126,9 +1986,7 @@ function repairLoginSystemV6() {
       duplicateUsernamesFixed: result.duplicateUsernamesFixed,
       blankCredentialsFixed: result.blankCredentialsFixed
     };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function repairPlainLoginRows_() {
@@ -2152,11 +2010,7 @@ function repairPlainLoginRows_() {
   const idx = indexMap_(headers);
   validateLoginHeaders_(idx);
 
-  const rows = values.slice(1).map(r => {
-    const copy = r.slice(0, headers.length);
-    while (copy.length < headers.length) copy.push('');
-    return copy;
-  });
+  const rows = values.slice(1).map(r => padRowToHeaders_(r, headers.length));
 
   const usedUsernames = {};
   let repairedRows = 0;
@@ -2302,18 +2156,13 @@ function normalizeVendorPasswordFlags_() {
 }
 
 function syncVendorUsersInternal_() {
-  const db = readDb_();
-  const vendorMap = {};
-  db.rows.forEach(r => {
-    const code = String(r.obj[COL.VENDOR_CODE] || '').trim();
-    const name = String(r.obj[COL.VENDOR_NAME] || '').trim();
-    if (code) vendorMap[code] = name;
-  });
+  const vendorMap = vendorNameMapFromDb_();
 
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idx = indexMap_(headers);
+  const users = readUsersTable_();
+  const sheet = users.sheet;
+  const values = users.values;
+  const headers = users.headers;
+  const idx = users.idx;
   const existingCode = {};
   const usedUsernames = {};
   values.slice(1).forEach(r => {
@@ -2330,22 +2179,14 @@ function syncVendorUsersInternal_() {
     const vendorName = vendorMap[code];
     const username = uniqueVendorUsername_(vendorName, code, usedUsernames);
     const password = defaultVendorPassword_(code, vendorName);
-    const userId = Utilities.getUuid();
-    const now = new Date();
-    const obj = {
-      USER_ID: userId,
-      USERNAME: username,
-      PASSWORD_HASH: password,
-      ROLE: 'VENDOR',
-      VENDOR_CODE: code,
-      VENDOR_NAME: vendorName,
-      ACTIVE: true,
-      MUST_CHANGE: false,
-      LAST_LOGIN: '',
-      CREATED_AT: now,
-      UPDATED_AT: now
-    };
-    newRows.push(headers.map(h => obj[h] === undefined ? '' : obj[h]));
+    const obj = newUserRecord_({
+      username: username,
+      password: password,
+      role: 'VENDOR',
+      vendorCode: code,
+      vendorName: vendorName
+    });
+    newRows.push(rowValuesFromObject_(headers, obj));
     credentials.push({ username: username, password: password, vendorCode: code, vendorName: vendorName });
   });
   if (newRows.length) sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, headers.length).setValues(newRows);
@@ -2366,23 +2207,13 @@ function migrateCredentialsToPlainTextOnce_() {
 }
 
 function regeneratePlainCredentialsInternal_(includeAdmin) {
-  const db = readDb_();
-  const vendorMap = {};
-  db.rows.forEach(r => {
-    const code = String(r.obj[COL.VENDOR_CODE] || '').trim();
-    const name = String(r.obj[COL.VENDOR_NAME] || '').trim();
-    if (code) vendorMap[code] = name;
-  });
+  const vendorMap = vendorNameMapFromDb_();
 
-  const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0];
-  const idx = indexMap_(headers);
-  const rows = values.slice(1).map(r => {
-    const copy = r.slice(0, headers.length);
-    while (copy.length < headers.length) copy.push('');
-    return copy;
-  });
+  const users = readUsersTable_();
+  const sheet = users.sheet;
+  const headers = users.headers;
+  const idx = users.idx;
+  const rows = users.values.slice(1).map(r => padRowToHeaders_(r, headers.length));
   const now = new Date();
   const usedUsernames = {};
   const existingVendorCodes = {};
@@ -2440,12 +2271,11 @@ function regeneratePlainCredentialsInternal_(includeAdmin) {
     const vendorName = vendorMap[code];
     const username = uniqueVendorUsername_(vendorName, code, usedUsernames);
     const password = defaultVendorPassword_(code, vendorName);
-    const obj = {
-      USER_ID: Utilities.getUuid(), USERNAME: username, PASSWORD_HASH: password,
-      ROLE: 'VENDOR', VENDOR_CODE: code, VENDOR_NAME: vendorName,
-      ACTIVE: true, MUST_CHANGE: false, LAST_LOGIN: '', CREATED_AT: now, UPDATED_AT: now
-    };
-    rows.push(headers.map(h => obj[h] === undefined ? '' : obj[h]));
+    const obj = newUserRecord_({
+      username: username, password: password, role: 'VENDOR',
+      vendorCode: code, vendorName: vendorName, now: now
+    });
+    rows.push(rowValuesFromObject_(headers, obj));
     credentials.push({ username: username, password: password, vendorCode: code, vendorName: vendorName });
   });
 
@@ -2529,6 +2359,182 @@ function savePhoto_(dataUrl, originalName, recordObj, session) {
 }
 
 // ========================= INTERNAL: UTILITIES =========================
+
+/** Menjalankan fn di dalam ScriptLock dan selalu melepas lock setelah selesai. */
+function withScriptLock_(timeoutMs, fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(timeoutMs);
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function rowHasValue_(row) {
+  return (row || []).some(function(v) { return v !== '' && v !== null; });
+}
+
+/** Menyalin baris sheet agar panjangnya sama dengan jumlah header. */
+function padRowToHeaders_(row, headerCount) {
+  const copy = (row || []).slice(0, headerCount);
+  while (copy.length < headerCount) copy.push('');
+  return copy;
+}
+
+/** Membaca sheet menjadi {sheet, headers, idx, rows} dengan baris kosong dibuang. */
+function readSheetTable_(sheetName, fallbackHeaders, options) {
+  options = options || {};
+  const ss = getSpreadsheet_();
+  const sheet = options.ensure ? ensureSheet_(ss, sheetName, fallbackHeaders) : ss.getSheetByName(sheetName);
+  if (!sheet) throw new Error('Sheet ' + sheetName + ' tidak ditemukan. Jalankan setupSystem().');
+  const values = sheet.getDataRange().getValues();
+  const headers = values.length ? values[0] : fallbackHeaders;
+  const rows = [];
+  for (let i = 1; i < values.length; i++) {
+    if (!rowHasValue_(values[i])) continue;
+    rows.push({ rowNumber: i + 1, values: values[i], obj: objectFromRow_(headers, values[i]) });
+  }
+  return { sheet: sheet, values: values, headers: headers, idx: indexMap_(headers), rows: rows };
+}
+
+/** Baris pertama pada tabel hasil readSheetTable_ yang kolomnya bernilai value. */
+function findTableRow_(table, column, value) {
+  const target = String(value === null || value === undefined ? '' : value);
+  const rows = table.rows || [];
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i].obj[column] || '') === target) return rows[i];
+  }
+  return null;
+}
+
+/** Sheet USERS dibaca dari banyak fungsi admin, selalu dengan header + indexMap. */
+function readUsersTable_() {
+  return readSheetTable_(CONFIG.SHEETS.USERS, CONFIG.USERS_HEADERS);
+}
+
+function readNotificationsTable_() {
+  return readSheetTable_(CONFIG.SHEETS.NOTIFICATIONS, CONFIG.NOTIFICATION_HEADERS, { ensure: true });
+}
+
+/** Baris baru sheet USERS. Password/username sudah final saat dipanggil. */
+function newUserRecord_(options) {
+  const now = options.now || new Date();
+  const role = String(options.role || 'VENDOR').toUpperCase();
+  return {
+    USER_ID: options.userId || Utilities.getUuid(),
+    USERNAME: String(options.username || ''),
+    PASSWORD_HASH: String(options.password || ''),
+    ROLE: role,
+    VENDOR_CODE: String(options.vendorCode || ''),
+    VENDOR_NAME: String(options.vendorName || ''),
+    ACTIVE: options.active !== false,
+    MUST_CHANGE: false,
+    LAST_LOGIN: '',
+    CREATED_AT: now,
+    UPDATED_AT: now
+  };
+}
+
+function rowValuesFromObject_(headers, obj) {
+  return headers.map(function(h) { return obj[h] === undefined ? '' : obj[h]; });
+}
+
+/** Peta VENDOR_CODE -> VENDOR_NAME dari database outstanding. */
+function vendorNameMapFromDb_() {
+  const map = {};
+  readDb_().rows.forEach(function(r) {
+    const code = String(r.obj[COL.VENDOR_CODE] || '').trim();
+    const name = String(r.obj[COL.VENDOR_NAME] || '').trim();
+    if (code) map[code] = name;
+  });
+  return map;
+}
+
+/** Potongan halaman standar untuk seluruh endpoint tabel. */
+function paginate_(rows, params, mapRow) {
+  params = params || {};
+  const pageSize = Math.min(100, Math.max(10, Number(params.pageSize || 25)));
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(totalPages, Math.max(1, Number(params.page || 1)));
+  const start = (page - 1) * pageSize;
+  return {
+    rows: rows.slice(start, start + pageSize).map(mapRow),
+    total: total,
+    page: page,
+    pageSize: pageSize,
+    totalPages: totalPages
+  };
+}
+
+/** Pencarian bebas pada gabungan beberapa kolom. */
+function matchesSearch_(values, search) {
+  if (!search) return true;
+  return values.join(' ').toLowerCase().indexOf(search) >= 0;
+}
+
+/**
+ * Filter kondisi ETA yang dipakai halaman Outstanding maupun Dashboard.
+ * ctx: { eta: Date|null, statusText: string, hasUpdate: boolean, today: Date }
+ */
+function matchesEtaState_(etaState, ctx) {
+  if (!etaState) return true;
+  const eta = ctx.eta;
+  if (etaState === 'PENDING_UPDATE' && ctx.hasUpdate) return false;
+  if (etaState === 'UPDATED' && !ctx.hasUpdate) return false;
+  if (etaState === 'NO_ETA' && eta) return false;
+  if (etaState === 'OVERDUE' && (!eta || stripTime_(eta) >= ctx.today || isDeliveredStatus_(ctx.statusText))) return false;
+  if (etaState === 'NEXT_7_DAYS') {
+    if (!eta) return false;
+    const diff = Math.ceil((stripTime_(eta).getTime() - ctx.today.getTime()) / 86400000);
+    if (diff < 0 || diff > 7 || isDeliveredStatus_(ctx.statusText)) return false;
+  }
+  return true;
+}
+
+function combineReleaseState_(released, notReleased) {
+  if (released && notReleased) return 'MIXED';
+  return released ? 'RELEASE' : 'NOT_RELEASE';
+}
+
+/**
+ * Jejak update vendor/admin. UPDATED_BY dan REVISION tetap dibaca untuk data
+ * versi lama yang belum memiliki LAST_UPDATE.
+ */
+function hasUpdateTrace_(o, cols) {
+  if (!o) return false;
+  return Boolean(o[cols.LAST_UPDATE]) || Boolean(String(o[cols.UPDATED_BY] || '').trim()) || number_(o[cols.REVISION]) > 0;
+}
+
+/** Header sheet dengan gaya seragam. */
+function formatSheetHeader_(sheet, lastCol, background, wrap) {
+  if (lastCol < 1) return;
+  const range = sheet.getRange(1, 1, 1, lastCol)
+    .setBackground(background).setFontColor('#ffffff').setFontWeight('bold')
+    .setHorizontalAlignment('center').setVerticalAlignment('middle');
+  if (wrap) range.setWrap(true);
+}
+
+/** formats: [{ column: 'HEADER', format: 'dd/MM/yyyy', span: 1 }] */
+function applyColumnFormats_(sheet, headers, lastRow, formats) {
+  if (lastRow <= 1) return;
+  const idx = indexMap_(headers);
+  formats.forEach(function(spec) {
+    const column = idx[spec.column];
+    if (column === undefined) return;
+    sheet.getRange(2, column + 1, lastRow - 1, spec.span || 1).setNumberFormat(spec.format);
+  });
+}
+
+function applyColumnWidths_(sheet, widths) {
+  widths.forEach(function(w, i) { sheet.setColumnWidth(i + 1, w); });
+}
+
+function refreshSheetFilter_(sheet, lastRow, lastCol) {
+  if (sheet.getFilter()) sheet.getFilter().remove();
+  if (lastRow >= 1) sheet.getRange(1, 1, Math.max(lastRow, 1), lastCol).createFilter();
+}
 
 function indexMap_(headers) {
   const map = {};
@@ -2648,10 +2654,7 @@ function toBoolean_(v) {
 
 function statusLabel_(o) {
   // STATUS dari file import tidak dipakai sebelum ada jejak update vendor/admin.
-  // UPDATED_BY/REVISION juga dibaca untuk kompatibilitas data update versi lama
-  // yang belum memiliki LAST_UPDATE.
-  const hasUpdate = Boolean(o[COL.LAST_UPDATE]) || Boolean(String(o[COL.UPDATED_BY] || '').trim()) || number_(o[COL.REVISION]) > 0;
-  if (!hasUpdate) return 'Need Update';
+  if (!hasUpdateTrace_(o, COL)) return 'Need Update';
   const status = String(o[COL.STATUS] || '').trim();
   return status || 'Updated';
 }
@@ -2671,8 +2674,7 @@ function releaseStateForChildren_(children) {
     if (isReleasedRow_(r.obj || {})) released++;
     else notReleased++;
   });
-  if (released && notReleased) return 'MIXED';
-  return released ? 'RELEASE' : 'NOT_RELEASE';
+  return combineReleaseState_(released, notReleased);
 }
 
 function parentReleaseState_(o) {
@@ -2689,8 +2691,7 @@ function parentReleaseState_(o) {
     if (isReleasedRow_(probe)) released = true;
     else notReleased = true;
   });
-  if (released && notReleased) return 'MIXED';
-  return released ? 'RELEASE' : 'NOT_RELEASE';
+  return combineReleaseState_(released, notReleased);
 }
 
 function buildParentSearchText_(children) {
@@ -2728,15 +2729,11 @@ function uniqueSorted_(arr) {
 
 function rebuildOutstandingParentDatabase() {
   ensureSystem_();
-  const lock = LockService.getScriptLock();
-  lock.waitLock(120000);
-  try {
+  return withScriptLock_(120000, function() {
     const result = syncOutstandingParents_({ preserveUpdates: true });
     formatAllSheets_();
     return { ok: true, message: 'Database ringkasan PO berhasil dibangun ulang.', result: result };
-  } finally {
-    lock.releaseLock();
-  }
+  });
 }
 
 function diagnoseParentChildV7() {
@@ -2764,16 +2761,7 @@ function diagnoseParentChildV7() {
 }
 
 function readParentDb_() {
-  const sheet = ensureSheet_(getSpreadsheet_(), CONFIG.SHEETS.PARENT, CONFIG.PARENT_HEADERS);
-  const values = sheet.getDataRange().getValues();
-  const headers = values.length ? values[0] : CONFIG.PARENT_HEADERS;
-  const idx = indexMap_(headers);
-  const rows = [];
-  for (let i = 1; i < values.length; i++) {
-    if (!values[i].some(function(v) { return v !== '' && v !== null; })) continue;
-    rows.push({ rowNumber: i + 1, values: values[i], obj: objectFromRow_(headers, values[i]) });
-  }
-  return { sheet: sheet, headers: headers, idx: idx, rows: rows };
+  return readSheetTable_(CONFIG.SHEETS.PARENT, CONFIG.PARENT_HEADERS, { ensure: true });
 }
 
 function makeParentPoId_(po, vendorCode, vendorName) {
@@ -2784,7 +2772,7 @@ function makeParentPoId_(po, vendorCode, vendorName) {
 }
 
 function parentHasUpdate_(o) {
-  return Boolean(o && o[PCOL.LAST_UPDATE]) || Boolean(String(o && o[PCOL.UPDATED_BY] || '').trim()) || number_(o && o[PCOL.REVISION]) > 0;
+  return hasUpdateTrace_(o, PCOL);
 }
 
 function parentStatusLabel_(o) {
@@ -2817,31 +2805,30 @@ function summarizeValues_(values, emptyValue) {
   return 'MULTIPLE (' + values.length + '): ' + values.slice(0, 3).join(', ') + (values.length > 3 ? ', ...' : '');
 }
 
-function minDateFromChildren_(children, key) {
+/** options: { newest: boolean, parser: function } */
+function pickDateFromChildren_(children, key, options) {
+  options = options || {};
+  const parse = options.parser || parseDate_;
+  const newest = options.newest !== false;
   let selected = null;
   children.forEach(function(r) {
-    const d = parseDate_(r.obj[key]);
-    if (d && (!selected || d.getTime() < selected.getTime())) selected = d;
+    const d = parse(r.obj[key]);
+    if (!d) return;
+    if (!selected || (newest ? d.getTime() > selected.getTime() : d.getTime() < selected.getTime())) selected = d;
   });
   return selected || '';
+}
+
+function minDateFromChildren_(children, key) {
+  return pickDateFromChildren_(children, key, { newest: false });
 }
 
 function maxDateFromChildren_(children, key) {
-  let selected = null;
-  children.forEach(function(r) {
-    const d = parseDate_(r.obj[key]);
-    if (d && (!selected || d.getTime() > selected.getTime())) selected = d;
-  });
-  return selected || '';
+  return pickDateFromChildren_(children, key);
 }
 
 function maxOperationalDateFromChildren_(children, key) {
-  let selected = null;
-  children.forEach(function(r) {
-    const d = parseOperationalDate_(r.obj[key]);
-    if (d && (!selected || d.getTime() > selected.getTime())) selected = d;
-  });
-  return selected || '';
+  return pickDateFromChildren_(children, key, { parser: parseOperationalDate_ });
 }
 
 function maxNumberFromChildren_(children, key) {
@@ -2855,8 +2842,7 @@ function maxNumberFromChildren_(children, key) {
 function latestUpdatedChild_(children) {
   let latest = null;
   children.forEach(function(r) {
-    const hasUpdate = Boolean(r.obj[COL.LAST_UPDATE]) || Boolean(String(r.obj[COL.UPDATED_BY] || '').trim()) || number_(r.obj[COL.REVISION]) > 0;
-    if (!hasUpdate) return;
+    if (!hasUpdateTrace_(r.obj, COL)) return;
     if (!latest || dateTimeMs_(r.obj[COL.LAST_UPDATE]) >= dateTimeMs_(latest.obj[COL.LAST_UPDATE])) latest = r;
   });
   return latest;
@@ -3253,23 +3239,18 @@ function formatParentSheet_(sheet, lastRow) {
   sheet.setFrozenRows(1);
   sheet.setFrozenColumns(2);
   const lastCol = CONFIG.PARENT_HEADERS.length;
-  sheet.getRange(1, 1, 1, lastCol)
-    .setBackground('#991b1b').setFontColor('#ffffff').setFontWeight('bold')
-    .setHorizontalAlignment('center').setVerticalAlignment('middle').setWrap(true);
+  formatSheetHeader_(sheet, lastCol, '#991b1b', true);
   sheet.setRowHeight(1, 42);
-  if (lastRow > 1) {
-    const idx = indexMap_(CONFIG.PARENT_HEADERS);
-    sheet.getRange(2, idx[PCOL.DOC_DATE] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy');
-    sheet.getRange(2, idx[PCOL.AGING] + 1, lastRow - 1, 1).setNumberFormat('0');
-    sheet.getRange(2, idx[PCOL.FULL_RELEASE_DATE] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy');
-    sheet.getRange(2, idx[PCOL.TARGET_SUPPLY] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy');
-    sheet.getRange(2, idx[PCOL.ETA] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy');
-    sheet.getRange(2, idx[PCOL.NET_VALUE] + 1, lastRow - 1, 1).setNumberFormat('#,##0');
-    sheet.getRange(2, idx[PCOL.LAST_UPDATE] + 1, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy HH:mm');
-  }
-  const widths = [190,120,110,230,100,80,120,120,80,80,80,120,110,110,140,160,130,150,170,150,100,250,150,250,220,160,140,120,100,80,380,420,140,140];
-  widths.forEach(function(w, i) { sheet.setColumnWidth(i + 1, w); });
-  if (sheet.getFilter()) sheet.getFilter().remove();
-  if (lastRow >= 1) sheet.getRange(1, 1, Math.max(lastRow, 1), lastCol).createFilter();
+  applyColumnFormats_(sheet, CONFIG.PARENT_HEADERS, lastRow, [
+    { column: PCOL.DOC_DATE, format: 'dd/MM/yyyy' },
+    { column: PCOL.AGING, format: '0' },
+    { column: PCOL.FULL_RELEASE_DATE, format: 'dd/MM/yyyy' },
+    { column: PCOL.TARGET_SUPPLY, format: 'dd/MM/yyyy' },
+    { column: PCOL.ETA, format: 'dd/MM/yyyy' },
+    { column: PCOL.NET_VALUE, format: '#,##0' },
+    { column: PCOL.LAST_UPDATE, format: 'dd/MM/yyyy HH:mm' }
+  ]);
+  applyColumnWidths_(sheet, [190,120,110,230,100,80,120,120,80,80,80,120,110,110,140,160,130,150,170,150,100,250,150,250,220,160,140,120,100,80,380,420,140,140]);
+  refreshSheetFilter_(sheet, lastRow, lastCol);
 }
 
