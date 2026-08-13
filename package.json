@@ -1,0 +1,10 @@
+{
+  "name": "ost-tracker-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Unit test harness for the OST Tracker Apps Script backend (Code.gs).",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage test/*.test.js"
+  }
+}
