@@ -591,6 +591,7 @@ function updateVendorRecord(token, payload) {
   if (!childCount) throw new Error('Line item untuk PO ini tidak ditemukan.');
 
   const oldState = stateFromParentObj_(parentObj);
+  const warnings = [];
   let photoUrl = oldState.photoUrl;
   let photoFileId = String(parentObj[PCOL.PHOTO_FILE_ID] || '');
 
@@ -600,6 +601,7 @@ function updateVendorRecord(token, payload) {
     const saved = savePhoto_(payload.photoData, payload.photoName, photoRecord, session);
     photoUrl = saved.url;
     photoFileId = saved.fileId;
+    if (saved.warning) warnings.push(saved.warning);
   }
 
   const etaInput = String(payload.eta || '').trim();
@@ -623,10 +625,19 @@ function updateVendorRecord(token, payload) {
   });
 
   // Audit tetap disimpan, tetapi tidak ada flush / rebuild database setelah submit.
-  const historyRecord = parentHistoryRecordObj_(applied.parent.obj, applied.childCount);
-  const historyObj = appendHistory_(historyRecord, oldState, newState, session, 'UPDATE_ETA');
-  if (session.role === 'VENDOR') {
-    appendVendorNotification_(historyObj, historyRecord, oldState, newState, session);
+  // Data PO sudah tertulis di titik ini, jadi kegagalan audit tidak boleh membatalkan update
+  // (vendor akan mengirim ulang dan menghasilkan data ganda). Kegagalan dicatat pada log dan
+  // dikembalikan sebagai peringatan agar tetap terlihat oleh pengguna.
+  try {
+    const historyRecord = parentHistoryRecordObj_(applied.parent.obj, applied.childCount);
+    const historyObj = appendHistory_(historyRecord, oldState, newState, session, 'UPDATE_ETA');
+    if (session.role === 'VENDOR') {
+      appendVendorNotification_(historyObj, historyRecord, oldState, newState, session);
+    }
+  } catch (err) {
+    logError_('updateVendorRecord: riwayat/notifikasi gagal disimpan untuk PO ' + String(parentObj[PCOL.PO] || ''), err);
+    warnings.push('Update PO tersimpan, tetapi riwayat/notifikasi gagal dicatat: '
+      + (err && err.message ? err.message : String(err)));
   }
 
   return {
@@ -635,6 +646,7 @@ function updateVendorRecord(token, payload) {
     record: parentRowToClient_(applied.parent),
     childCount: applied.childCount,
     savedAt: toClientDateTime_(now),
+    warnings: warnings,
     fastMode: true
   };
 }
@@ -1236,7 +1248,11 @@ function ensurePhotoFolder_() {
   const props = PropertiesService.getScriptProperties();
   const stored = props.getProperty('PHOTO_FOLDER_ID');
   if (stored) {
-    try { return DriveApp.getFolderById(stored); } catch (e) { /* recreate */ }
+    try {
+      return DriveApp.getFolderById(stored);
+    } catch (err) {
+      logError_('ensurePhotoFolder_: folder foto tersimpan tidak dapat dibuka, folder dibuat ulang', err);
+    }
   }
   const folders = DriveApp.getFoldersByName(CONFIG.PHOTO_FOLDER_NAME);
   const folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(CONFIG.PHOTO_FOLDER_NAME);
@@ -1937,7 +1953,12 @@ function refreshSession_(token, session) {
   let oldPayload = null;
   const oldJson = props.getProperty(key) || CacheService.getScriptCache().get(key);
   if (oldJson) {
-    try { oldPayload = JSON.parse(oldJson); } catch (e) { oldPayload = null; }
+    try {
+      oldPayload = JSON.parse(oldJson);
+    } catch (err) {
+      logError_('refreshSession_: payload session lama tidak valid, masa berlaku dihitung ulang', err);
+      oldPayload = null;
+    }
   }
 
   const nowMs = Date.now();
@@ -1995,7 +2016,8 @@ function cleanupExpiredSessions_() {
     try {
       const item = JSON.parse(all[key]);
       if (!item.expiresAtMs || Number(item.expiresAtMs) <= nowMs) expiredKeys.push(key);
-    } catch (e) {
+    } catch (err) {
+      logError_('cleanupExpiredSessions_: data session rusak dihapus (' + key + ')', err);
       expiredKeys.push(key);
     }
   });
@@ -2005,7 +2027,9 @@ function cleanupExpiredSessions_() {
 
 function getActiveUserForSession_(userId) {
   const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
-  if (!sheet) return null;
+  // Sheet USERS hilang adalah kegagalan sistem, bukan akun nonaktif. Bedakan agar pengguna
+  // tidak menerima pesan "akun tidak aktif" yang menyesatkan.
+  if (!sheet) throw new Error('Sheet USERS tidak ditemukan. Jalankan setupSystem().');
 
   const range = sheet.getDataRange();
   const values = range.getValues();
@@ -2523,12 +2547,31 @@ function savePhoto_(dataUrl, originalName, recordObj, session) {
   const filename = [safePo, safeItem, session.vendorCode || session.username, stamp].join('_') + '.' + ext;
   const blob = Utilities.newBlob(bytes, mime, filename);
   const file = ensurePhotoFolder_().createFile(blob);
-  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) { /* Workspace may block public links */ }
+  let warning = '';
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (err) {
+    // Kebijakan Workspace dapat memblokir link publik. Foto tetap tersimpan, tetapi preview
+    // dapat gagal dibuka sehingga kegagalan ini dilaporkan ke pemanggil, tidak dibuang.
+    logError_('savePhoto_: link publik gagal diaktifkan untuk file ' + file.getId(), err);
+    warning = 'Foto tersimpan, tetapi link publik gagal diaktifkan sehingga preview foto mungkin tidak terbuka: '
+      + (err && err.message ? err.message : String(err));
+  }
   const url = 'https://drive.google.com/uc?export=view&id=' + file.getId();
-  return { fileId: file.getId(), url: url, driveUrl: file.getUrl() };
+  return { fileId: file.getId(), url: url, driveUrl: file.getUrl(), warning: warning };
 }
 
 // ========================= INTERNAL: UTILITIES =========================
+
+/**
+ * Mencatat kegagalan yang sengaja tidak dipropagasi ke pengguna.
+ * Tanpa ini kegagalan best-effort (Drive, cache, audit) hilang tanpa jejak pada log Apps Script.
+ */
+function logError_(context, err) {
+  const message = err && err.message ? err.message : String(err);
+  const stack = err && err.stack ? '\n' + err.stack : '';
+  console.error('[' + CONFIG.APP_VERSION + '] ' + context + ': ' + message + stack);
+}
 
 function indexMap_(headers) {
   const map = {};

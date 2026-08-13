@@ -1305,7 +1305,10 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
       if(style)style.media=sig.isPhone?'all':'not all';
       root.style.setProperty('--app-vh',(num(sig.viewportH,innerHeight||100)*0.01)+'px');
       root.style.setProperty('--app-vw',(num(sig.viewportW,innerWidth||100)*0.01)+'px');
-    }catch(e){}
+    }catch(e){
+      // Layout tetap dipakai apa adanya, tetapi penyebabnya harus terlihat saat debugging.
+      console.error('[OST] Mode tampilan HP gagal diterapkan:',e&&e.message||e,e);
+    }
   }
 
   function scheduleApply(){
@@ -1616,14 +1619,27 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
   document.addEventListener('DOMContentLoaded', init);
 
   async function init(){
+    bindGlobalErrorHandlers();
     applyTheme((localStorage.getItem('ob_theme')||localStorage.getItem('ob_login_theme')||'dark'));
     bindEvents();
     startClock();
     await loadLoginUsers();
     if(state.token){
       try{ await enterApp(); }
-      catch(e){ clearSession(); showLogin(); }
+      catch(err){
+        logError('Pemulihan sesi',err);
+        clearSession();
+        showLogin();
+        toast('error','Sesi tidak dapat dilanjutkan',errorMessage(err));
+      }
     }else showLogin();
+  }
+
+  // Error yang tidak tertangkap sebelumnya hilang tanpa jejak. Handler ini memastikan
+  // setiap kegagalan tetap tercatat pada console browser.
+  function bindGlobalErrorHandlers(){
+    window.addEventListener('unhandledrejection',e=>logError('Promise tanpa penanganan',e&&e.reason));
+    window.addEventListener('error',e=>logError('Error tidak tertangkap',e&&(e.error||e.message)));
   }
 
   function bindEvents(){
@@ -1717,7 +1733,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
     document.body.classList.toggle('theme-dark',safe==='dark');
     const view=document.getElementById('loginView');
     if(view) view.classList.toggle('login-dark',safe==='dark');
-    try{localStorage.setItem('ob_theme',safe);localStorage.setItem('ob_login_theme',safe)}catch(e){}
+    try{localStorage.setItem('ob_theme',safe);localStorage.setItem('ob_login_theme',safe)}catch(err){logError('Simpan preferensi tema',err)}
     updateThemeButtons(safe);
     if(state.dashboardData && typeof Chart!=='undefined') renderDashboardCharts(state.dashboardData.charts);
   }
@@ -1727,11 +1743,42 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
     applyTheme(next);
   }
 
+  function errorMessage(err){
+    if(err===null||err===undefined)return 'Terjadi kesalahan yang tidak diketahui.';
+    if(typeof err==='string')return err;
+    if(err.message)return String(err.message);
+    if(err.error&&err.error.message)return String(err.error.message);
+    try{return JSON.stringify(err)}catch(e){return String(err)}
+  }
+
+  function logError(context,err){
+    console.error('[OST] '+context+':',errorMessage(err),err);
+  }
+
+  function showWarnings(warnings){
+    (Array.isArray(warnings)?warnings:[]).forEach(w=>{if(w)toast('info','Perlu diperiksa',String(w))});
+  }
+
   function callServer(fn,...args){
     return new Promise((resolve,reject)=>{
-      google.script.run
+      if(!(window.google&&google.script&&google.script.run)){
+        reject(new Error('Koneksi ke server Apps Script tidak tersedia. Muat ulang halaman.'));
+        return;
+      }
+      const runner=google.script.run
         .withSuccessHandler(resolve)
-        .withFailureHandler(err=>reject(new Error((err&&err.message)||String(err))))[fn](...args);
+        .withFailureHandler(err=>{
+          logError('Server '+fn,err);
+          const error=new Error(errorMessage(err));
+          error.serverFunction=fn;
+          if(err&&err.name)error.serverName=String(err.name);
+          reject(error);
+        });
+      if(typeof runner[fn]!=='function'){
+        reject(new Error('Fungsi server tidak tersedia: '+fn));
+        return;
+      }
+      try{runner[fn](...args)}catch(err){logError('Pemanggilan server '+fn,err);reject(new Error(errorMessage(err)))}
     });
   }
 
@@ -1740,7 +1787,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
       state.loginUsers=await callServer('getLoginUserOptions');
     }catch(err){
       state.loginUsers=[];
-      console.warn('Daftar user login belum dapat dimuat:',err.message);
+      logError('Daftar user login belum dapat dimuat',err);
     }
   }
 
@@ -1814,7 +1861,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
     }catch(err){
       document.getElementById('loginPassword').value='';
       document.getElementById('loginPassword').focus();
-      toast('error','Login gagal',err.message);
+      toast('error','Login gagal',errorMessage(err));
     }
     finally{setLoading(false)}
   }
@@ -1928,7 +1975,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
       ];
       for(const job of jobs){
         if(!state.token)break;
-        try{await job()}catch(e){console.warn('Prefetch:',e&&e.message||e)}
+        try{await job()}catch(err){logError('Prefetch halaman',err)}
         await delay(PERF.PREFETCH_GAP_MS);
       }
     });
@@ -1953,8 +2000,11 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
   function clearSession(){if(state.notificationPoll)clearInterval(state.notificationPoll);state.notificationPoll=null;state.lastNotificationUnreadToday=null;state.token='';state.user=null;state.bootstrap=null;state.pageCache={};state.pageRenderedAt={};state.backgroundLoads={};state.prefetchStarted=false;sessionStorage.removeItem('ob_token')}
 
   async function handleLogout(){
-    try{if(state.token)await callServer('logout',state.token)}catch(e){}
-    clearSession(); showLogin(); toast('info','Keluar dari sistem','Sesi Anda telah ditutup.');
+    let serverError=null;
+    try{if(state.token)await callServer('logout',state.token)}catch(err){serverError=err;logError('Logout server',err)}
+    clearSession(); showLogin();
+    if(serverError)toast('info','Sesi ditutup di perangkat ini','Server gagal menutup sesi: '+errorMessage(serverError));
+    else toast('info','Keluar dari sistem','Sesi Anda telah ditutup.');
   }
 
   function toggleVendorNotificationMenu(forceOpen){
@@ -1988,7 +2038,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
     state.notificationPage=1;
     applyNotificationViewCopy();
     navigate('notifications');
-    loadNotifications(1,{silent:true,preferCache:true}).catch(err=>console.warn('Notification view:',err&&err.message||err));
+    loadNotifications(1,{silent:true,preferCache:true}).catch(err=>logError('Muat notifikasi',err));
   }
 
   function navigate(page){
@@ -2016,7 +2066,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
     if(page==='notifications')task=loadNotifications(state.notificationPage||1,options);
     if(page==='history')task=loadHistory(state.historyPage||1,options);
     if(page==='users')task=loadUsers(options);
-    if(task&&typeof task.catch==='function')task.catch(err=>console.warn('Navigation refresh:',err&&err.message||err));
+    if(task&&typeof task.catch==='function')task.catch(err=>logError('Refresh navigasi halaman '+page,err));
   }
 
   function dashboardFilters(){return{search:val('dashSearch'),vendor:val('dashVendor'),status:val('dashStatus'),source:val('dashSource'),etaState:val('dashEtaState')}}
@@ -2377,7 +2427,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
     if(local){
       populateUpdateModal(local);
       // Detail lengkap diprefetch diam-diam untuk klik berikutnya.
-      callServer('getRecordDetail',state.token,parentId).then(r=>setCached('detail',detailPayload,r)).catch(()=>{});
+      callServer('getRecordDetail',state.token,parentId).then(r=>setCached('detail',detailPayload,r)).catch(err=>logError('Prefetch detail PO',err));
       return;
     }
 
@@ -2402,13 +2452,13 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
   function refreshAfterVendorSave(){
     // Tidak ditunggu oleh tombol Simpan. Semua refresh dilakukan silent di background.
     scheduleIdle(()=>{
-      loadOutstanding(state.outstandingPage||1,{silent:true,force:true}).catch(err=>console.warn('Background outstanding refresh:',err&&err.message||err));
+      loadOutstanding(state.outstandingPage||1,{silent:true,force:true}).catch(err=>logError('Refresh outstanding di background',err));
     },300);
     scheduleIdle(()=>{
-      loadDashboard({silent:true,force:true,render:state.currentPage==='dashboard'}).catch(err=>console.warn('Background dashboard refresh:',err&&err.message||err));
+      loadDashboard({silent:true,force:true,render:state.currentPage==='dashboard'}).catch(err=>logError('Refresh dashboard di background',err));
     },900);
     if(state.user&&state.user.role==='ADMIN'){
-      scheduleIdle(()=>loadNotifications(1,{silent:true,force:true,render:state.currentPage==='notifications'}).catch(()=>{}),1400);
+      scheduleIdle(()=>loadNotifications(1,{silent:true,force:true,render:state.currentPage==='notifications'}).catch(err=>logError('Refresh notifikasi di background',err)),1400);
     }
   }
 
@@ -2432,6 +2482,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
       patchOutstandingRecordLocal(res.record);
       invalidateCache(['dashboard','outstanding','detail','history','notifications']);
       toast('success','Update tersimpan',res.message);
+      showWarnings(res.warnings);
       refreshAfterVendorSave();
     }catch(err){
       handleServerError(err);
@@ -2458,7 +2509,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
       state.selectedPhoto={dataUrl,name:file.name};
       document.getElementById('photoPreviewImg').src=dataUrl;
       document.getElementById('photoPreview').classList.add('show');
-    }catch(err){toast('error','Foto gagal diproses',err.message)}finally{setLoading(false);e.target.value=''}
+    }catch(err){logError('Kompresi foto',err);toast('error','Foto gagal diproses',errorMessage(err))}finally{setLoading(false);e.target.value=''}
   }
 
   function compressImage(file,maxWidth,quality){
@@ -2502,7 +2553,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
         toast('info','Update vendor masuk',`${formatNumber(delta)} notifikasi vendor ${hasNewWhileOpen?'baru diterima':'belum dibaca hari ini'}. Buka Notifikasi Vendor → Update Vendor.`);
       }
       state.lastNotificationUnreadToday=summary.unreadToday||0;
-    }catch(err){console.warn('Notification badge:',err.message)}
+    }catch(err){logError('Badge notifikasi',err)}
   }
 
   function applyNotificationData(data){
@@ -2546,7 +2597,12 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
   }
 
   async function openNotificationDetail(notificationId,historyId){
-    try{await callServer('markNotificationRead',state.token,notificationId)}catch(e){}
+    try{
+      await callServer('markNotificationRead',state.token,notificationId);
+    }catch(err){
+      logError('Tandai notifikasi dibaca',err);
+      toast('error','Notifikasi gagal ditandai',errorMessage(err));
+    }
     invalidateCache(['notifications']);
     await Promise.all([refreshNotificationBadge(false),loadNotifications(state.notificationPage,{force:true})]);
     await openHistoryDetail(historyId);
@@ -2650,7 +2706,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
       const badge=document.getElementById('importValidationBadge');badge.className='status '+(missing.length?'status-danger':'status-success');badge.textContent=missing.length?'Kolom Tidak Lengkap':'Valid';
       const alert=document.getElementById('mappingAlert');alert.className='mapping-alert'+(missing.length?' error':'');alert.textContent=missing.length?('Kolom wajib belum ditemukan: '+missing.join(', ')):('Struktur valid. Kolom PO, ITEM, PART NUMBER, dan VENDOR berhasil dikenali.');
       document.getElementById('executeImportBtn').disabled=missing.length>0;renderImportPreview(headers,rows.slice(0,12));
-    }catch(err){state.importData=null;toast('error','Excel gagal dibaca',err.message)}finally{setLoading(false)}
+    }catch(err){state.importData=null;logError('Baca file Excel',err);toast('error','Excel gagal dibaca',errorMessage(err))}finally{setLoading(false)}
   }
 
   function renderImportPreview(headers,rows){
@@ -2680,7 +2736,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
       await ensureSheetJs();
       const headers=['AGING','TANGGAL PO FULL RELEASE','TARGET SUPPLY','WO','STATUS RELEASED','PO','ITEM','DOCUMENT DATE','PART NUMBER','SHORT TEXT','ORDER QUANTITY','QTY OS','UNIT','NET PRICE','NET VALUE','SLOC','REQUISITIONER','VENDOR','SOURCE STOCK','ETA','KET/ETD (Estimasi Barang dikirim)','STATUS'];
       const ws=XLSX.utils.aoa_to_sheet([headers]);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'OUTSTANDING');XLSX.writeFile(wb,'Template_Import_Outstanding.xlsx');
-    }catch(err){toast('error','Template gagal dibuat',err.message)}
+    }catch(err){logError('Template Excel',err);toast('error','Template gagal dibuat',errorMessage(err))}
   }
 
   async function loadUsers(options={}){
@@ -2770,7 +2826,7 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
   }
 
   async function copyText(text){
-    try{await navigator.clipboard.writeText(String(text||''));toast('success','Berhasil disalin','Password sudah disalin ke clipboard.')}catch(e){toast('error','Gagal menyalin','Salin password secara manual.')}
+    try{await navigator.clipboard.writeText(String(text||''));toast('success','Berhasil disalin','Password sudah disalin ke clipboard.')}catch(err){logError('Salin ke clipboard',err);toast('error','Gagal menyalin','Salin password secara manual.')}
   }
 
   function askConfirm({title='Konfirmasi',subtitle='Periksa kembali tindakan Anda',message='',confirmText='Lanjutkan',cancelText='Batal',messageTitle='Apakah Anda yakin?'}={}){
@@ -2815,7 +2871,10 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
     const el=document.createElement('div');el.className='toast '+type;el.innerHTML=`<div>${type==='success'?'✓':type==='error'?'!':'i'}</div><div><b>${escapeHtml(title)}</b><span>${escapeHtml(message)}</span></div>`;document.getElementById('toastStack').appendChild(el);setTimeout(()=>el.remove(),4500)
   }
   function handleServerError(err){
-    const msg=err&&err.message||String(err);toast('error','Proses gagal',msg);if(/sesi/i.test(msg)){clearSession();showLogin()}
+    const msg=errorMessage(err);
+    logError('Proses server gagal',err);
+    toast('error','Proses gagal',msg);
+    if(/sesi/i.test(msg)){clearSession();showLogin()}
   }
 
   function releaseStateLabel(stateValue){
