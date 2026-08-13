@@ -25,9 +25,11 @@ const CONFIG = Object.freeze({
   },
   PHOTO_FOLDER_NAME: 'OUTSTANDING_BACKLOG_VENDOR_PHOTOS',
   DEFAULT_ADMIN: {
-    username: 'admin',
-    password: 'Admin@123'
+    username: 'admin'
   },
+  GENERATED_PASSWORD_LENGTH: 16,
+  LOGIN_MAX_FAILURES: 8,
+  LOGIN_LOCK_SECONDS: 900,
   DB_HEADERS: [
     'AGING',
     'TANGGAL PO FULL RELEASE',
@@ -148,8 +150,9 @@ function doGet() {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-/** Run once from Apps Script editor. */
-function setupSystem() {
+/** Run once from Apps Script editor, or from the app with an Admin session token. */
+function setupSystem(token) {
+  requireMaintenanceAccess_(token);
   const lock = LockService.getScriptLock();
   lock.waitLock(120000);
   try {
@@ -161,7 +164,7 @@ function setupSystem() {
     ensureSheet_(ss, CONFIG.SHEETS.NOTIFICATIONS, CONFIG.NOTIFICATION_HEADERS);
     ensureSheet_(ss, CONFIG.SHEETS.SETTINGS, CONFIG.SETTINGS_HEADERS);
     ensureSettings_();
-    ensureAdmin_();
+    const adminBootstrap = ensureAdmin_();
     const credentialMigration = migrateCredentialsToPlainTextOnce_();
     const loginRepair = repairPlainLoginRows_();
     normalizeVendorPasswordFlags_();
@@ -173,8 +176,8 @@ function setupSystem() {
       ok: true,
       message: 'Sistem outstanding PO berhasil disiapkan.',
       spreadsheetId: ss.getId(),
-      adminUsername: CONFIG.DEFAULT_ADMIN.username,
-      adminPassword: CONFIG.DEFAULT_ADMIN.password,
+      adminUsername: adminBootstrap.username || CONFIG.DEFAULT_ADMIN.username,
+      adminPassword: adminBootstrap.password || '',
       credentialMigration: credentialMigration,
       loginRepair: loginRepair,
       parentSync: parentSync,
@@ -195,6 +198,8 @@ function login(username, password) {
   if (!loginKey || !trimmedPassword) {
     throw new Error('Username dan password wajib diisi.');
   }
+
+  assertLoginNotLocked_(loginKey);
 
   const userSheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
   if (!userSheet) throw new Error('Sheet USERS tidak ditemukan. Jalankan setupSystem().');
@@ -240,7 +245,8 @@ function login(username, password) {
   }
 
   if (!candidates.length) {
-    throw new Error('Username tidak ditemukan. Pilih username dari hasil pencarian login.');
+    registerLoginFailure_(loginKey);
+    throw new Error('Username atau password salah.');
   }
 
   let inactiveCount = 0;
@@ -300,6 +306,7 @@ function login(username, password) {
       appVersion: CONFIG.APP_VERSION
     };
 
+    clearLoginFailures_(loginKey);
     const token = createSession_(session);
     return {
       ok: true,
@@ -313,7 +320,8 @@ function login(username, password) {
     throw new Error('Akun tidak aktif. Hubungi admin.');
   }
 
-  throw new Error('Password salah. Gunakan password persis seperti pada kolom PASSWORD_HASH.');
+  registerLoginFailure_(loginKey);
+  throw new Error('Username atau password salah.');
 }
 
 function logout(token) {
@@ -1052,7 +1060,7 @@ function saveUser(token, payload) {
   } else {
     const userId = Utilities.getUuid();
     const password = String(payload.password || (role === 'ADMIN'
-      ? CONFIG.DEFAULT_ADMIN.password
+      ? generatePassword_()
       : defaultVendorPassword_(String(payload.vendorCode || ''), String(payload.vendorName || ''))));
     const obj = {
       USER_ID: userId,
@@ -1085,7 +1093,7 @@ function resetUserPassword(token, userId) {
     const vendorCode = String(values[i][idx.VENDOR_CODE] || '');
     const vendorName = String(values[i][idx.VENDOR_NAME] || '');
     const newPassword = role === 'ADMIN'
-      ? CONFIG.DEFAULT_ADMIN.password
+      ? generatePassword_()
       : defaultVendorPassword_(vendorCode, vendorName);
     sheet.getRange(i + 1, idx.PASSWORD_HASH + 1).setValue(newPassword);
     sheet.getRange(i + 1, idx.MUST_CHANGE + 1).setValue(false);
@@ -1207,29 +1215,47 @@ function ensureSettings_() {
   if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 3).setValues(rows);
 }
 
+/**
+ * Membuat akun admin awal bila belum ada. Password dibuat acak, tidak pernah
+ * ditulis di dalam source code. Password hasil generate dikembalikan ke pemanggil
+ * dan juga disimpan pada Script Properties agar pemilik script dapat mengambilnya.
+ */
 function ensureAdmin_() {
   const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
   const values = sheet.getDataRange().getValues();
   const headers = values[0];
   const idx = indexMap_(headers);
   const exists = values.slice(1).some(r => String(r[idx.ROLE] || '').toUpperCase() === 'ADMIN');
-  if (exists) return;
+  if (exists) return { created: false, username: '', password: '' };
   const now = new Date();
   const userId = Utilities.getUuid();
+  const password = generatePassword_();
   const obj = {
     USER_ID: userId,
     USERNAME: CONFIG.DEFAULT_ADMIN.username,
-    PASSWORD_HASH: CONFIG.DEFAULT_ADMIN.password,
+    PASSWORD_HASH: password,
     ROLE: 'ADMIN',
     VENDOR_CODE: '',
     VENDOR_NAME: '',
     ACTIVE: true,
-    MUST_CHANGE: false,
+    MUST_CHANGE: true,
     LAST_LOGIN: '',
     CREATED_AT: now,
     UPDATED_AT: now
   };
   sheet.appendRow(headers.map(h => obj[h] === undefined ? '' : obj[h]));
+  PropertiesService.getScriptProperties().setProperty('INITIAL_ADMIN_PASSWORD', password);
+  return { created: true, username: CONFIG.DEFAULT_ADMIN.username, password: password };
+}
+
+/** Password admin awal hanya dapat dibaca pemilik script atau Admin yang sedang login. */
+function getInitialAdminPassword(token) {
+  requireMaintenanceAccess_(token);
+  return {
+    ok: true,
+    username: CONFIG.DEFAULT_ADMIN.username,
+    password: PropertiesService.getScriptProperties().getProperty('INITIAL_ADMIN_PASSWORD') || ''
+  };
 }
 
 function ensurePhotoFolder_() {
@@ -1979,6 +2005,54 @@ function sessionKey_(token) {
   return 'SESSION_' + token;
 }
 
+/**
+ * Membatasi fungsi setup / perbaikan / diagnostik. Tanpa penjagaan ini seluruh
+ * fungsi global dapat dipanggil siapa pun lewat google.script.run tanpa login.
+ * Tanpa token: hanya pemilik script (mis. dijalankan dari editor Apps Script).
+ * Dengan token: wajib session Admin yang aktif.
+ */
+function requireMaintenanceAccess_(token) {
+  if (String(token === null || token === undefined ? '' : token).trim()) {
+    return requireAdmin_(token);
+  }
+  const effectiveEmail = userEmail_(Session.getEffectiveUser());
+  const activeEmail = userEmail_(Session.getActiveUser());
+  if (effectiveEmail && activeEmail && effectiveEmail === activeEmail) {
+    return { userId: 'SCRIPT_OWNER', username: activeEmail, role: 'ADMIN' };
+  }
+  throw new Error('Fungsi ini hanya dapat dijalankan pemilik script atau Admin yang sedang login.');
+}
+
+function userEmail_(user) {
+  try { return String((user && user.getEmail()) || '').toLowerCase(); } catch (e) { return ''; }
+}
+
+// Pembatas percobaan login untuk menahan serangan brute force pada password.
+function loginFailureKey_(loginKey) {
+  return 'LOGIN_FAIL_' + Utilities.base64EncodeWebSafe(String(loginKey || ''));
+}
+
+function loginFailureCount_(loginKey) {
+  const raw = CacheService.getScriptCache().get(loginFailureKey_(loginKey));
+  return raw ? Number(raw) || 0 : 0;
+}
+
+function assertLoginNotLocked_(loginKey) {
+  if (loginFailureCount_(loginKey) >= CONFIG.LOGIN_MAX_FAILURES) {
+    throw new Error('Percobaan login terlalu banyak. Coba lagi setelah '
+      + Math.round(CONFIG.LOGIN_LOCK_SECONDS / 60) + ' menit.');
+  }
+}
+
+function registerLoginFailure_(loginKey) {
+  const cache = CacheService.getScriptCache();
+  cache.put(loginFailureKey_(loginKey), String(loginFailureCount_(loginKey) + 1), CONFIG.LOGIN_LOCK_SECONDS);
+}
+
+function clearLoginFailures_(loginKey) {
+  CacheService.getScriptCache().remove(loginFailureKey_(loginKey));
+}
+
 function normalizeSessionToken_(token) {
   const text = String(token || '').trim();
   return /^[A-Za-z0-9_-]{20,200}$/.test(text) ? text : '';
@@ -2040,7 +2114,8 @@ function getActiveUserForSession_(userId) {
  * Diagnostik aman: mengecek header USERS, jumlah akun aktif, dan session engine.
  * Tidak menampilkan password.
  */
-function diagnoseLoginSystemV62() {
+function diagnoseLoginSystemV62(token) {
+  requireMaintenanceAccess_(token);
   ensureSystem_();
   const sheet = getSpreadsheet_().getSheetByName(CONFIG.SHEETS.USERS);
   const range = sheet.getDataRange();
@@ -2080,14 +2155,14 @@ function diagnoseLoginSystemV62() {
     loginAt: new Date().toISOString(),
     appVersion: CONFIG.APP_VERSION
   };
-  const token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  const probeToken = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
   const payload = Object.assign({}, diagnosticSession, {
     issuedAtMs: Date.now(),
     expiresAtMs: Date.now() + 60000
   });
-  saveSessionPayload_(token, payload);
-  const stored = PropertiesService.getScriptProperties().getProperty(sessionKey_(token));
-  deleteSession_(token);
+  saveSessionPayload_(probeToken, payload);
+  const stored = PropertiesService.getScriptProperties().getProperty(sessionKey_(probeToken));
+  deleteSession_(probeToken);
 
   return {
     ok: Boolean(stored),
@@ -2110,7 +2185,8 @@ function diagnoseLoginSystemV62() {
  * Fungsi ini merapikan USERNAME/PASSWORD_HASH, mengubah kolom credential menjadi teks,
  * memperbaiki username duplikat, dan mereset hash lama ke password default.
  */
-function repairLoginSystemV6() {
+function repairLoginSystemV6(token) {
+  requireMaintenanceAccess_(token);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -2199,7 +2275,7 @@ function repairPlainLoginRows_() {
 
     if (!password || looksLikeLegacySha256_(password.trim())) {
       password = role === 'ADMIN'
-        ? CONFIG.DEFAULT_ADMIN.password
+        ? generatePassword_()
         : defaultVendorPassword_(vendorCode, vendorName);
       if (!credentialCellText_(displayRow[idx.PASSWORD_HASH], row[idx.PASSWORD_HASH])) {
         blankCredentialsFixed++;
@@ -2397,7 +2473,7 @@ function regeneratePlainCredentialsInternal_(includeAdmin) {
     if (username) usedUsernames[username] = true;
   });
 
-  // Admin direset satu kali menjadi admin / Admin@123 agar hash lama dapat ditinggalkan.
+  // Admin direset satu kali dengan password acak agar hash lama dapat ditinggalkan.
   if (includeAdmin) {
     let adminNumber = 0;
     rows.forEach(r => {
@@ -2406,7 +2482,7 @@ function regeneratePlainCredentialsInternal_(includeAdmin) {
       adminNumber++;
       const base = adminNumber === 1 ? CONFIG.DEFAULT_ADMIN.username : 'admin.' + adminNumber;
       const username = uniqueUsername_(base, String(adminNumber), usedUsernames);
-      const password = adminNumber === 1 ? CONFIG.DEFAULT_ADMIN.password : 'Admin@' + String(adminNumber).padStart(3, '0');
+      const password = generatePassword_();
       r[idx.USERNAME] = username;
       r[idx.PASSWORD_HASH] = password;
       r[idx.ACTIVE] = true;
@@ -2486,16 +2562,26 @@ function uniqueUsername_(base, suffix, usedUsernames) {
   return candidate;
 }
 
+/**
+ * Password awal vendor dibuat acak. Password lama dibuat dari VENDOR_CODE dan
+ * VENDOR_NAME sehingga dapat ditebak siapa pun yang melihat daftar vendor pada
+ * halaman login. Admin melihat password hasil generate pada menu User.
+ */
 function defaultVendorPassword_(vendorCode, vendorName) {
-  const digits = String(vendorCode || '').replace(/\D/g, '');
-  const suffix = (digits || '0000').slice(-4).padStart(4, '0');
-  let name = String(vendorName || '').trim();
-  try { name = name.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) { /* ignore */ }
-  const ignored = { PT: true, CV: true, UD: true, TBK: true, PERSERO: true };
-  const words = name.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
-  let word = words.find(w => !ignored[w]) || 'VENDOR';
-  word = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-  return word.slice(0, 14) + '@' + suffix;
+  return generatePassword_();
+}
+
+/** Password acak untuk akun baru dan reset password. */
+function generatePassword_() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  const length = Math.max(12, Number(CONFIG.GENERATED_PASSWORD_LENGTH) || 16);
+  let entropy = '';
+  while (entropy.length < length * 2) entropy += Utilities.getUuid().replace(/-/g, '');
+  let out = '';
+  for (let i = 0; i < length; i++) {
+    out += alphabet.charAt(parseInt(entropy.substr(i * 2, 2), 16) % alphabet.length);
+  }
+  return out.slice(0, length - 5) + '@' + out.slice(length - 5);
 }
 
 function looksLikeLegacySha256_(value) {
@@ -2726,7 +2812,8 @@ function uniqueSorted_(arr) {
 
 // ========================= V7: PARENT-CHILD PO DATABASE =========================
 
-function rebuildOutstandingParentDatabase() {
+function rebuildOutstandingParentDatabase(token) {
+  requireMaintenanceAccess_(token);
   ensureSystem_();
   const lock = LockService.getScriptLock();
   lock.waitLock(120000);
@@ -2739,7 +2826,8 @@ function rebuildOutstandingParentDatabase() {
   }
 }
 
-function diagnoseParentChildV7() {
+function diagnoseParentChildV7(token) {
+  requireMaintenanceAccess_(token);
   ensureSystem_();
   ensureParentData_();
   const db = readDb_();
