@@ -10,7 +10,7 @@
   <meta name="format-detection" content="telephone=no">
   <meta name="theme-color" content="#991b1b">
   <title>Outstanding Backlog | Vendor ETA V7.14.3M6</title>
-  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
     :root {
       --primary:#991b1b;
@@ -1940,6 +1940,9 @@ html.force-mobile-ui .m6-detail-photo{width:100%!important;margin-top:clamp(4px,
     state.sheetJsPromise=new Promise((resolve,reject)=>{
       const script=document.createElement('script');
       script.src='https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+      script.integrity='sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT';
+      script.crossOrigin='anonymous';
+      script.referrerPolicy='no-referrer';
       script.async=true;
       script.onload=()=>resolve(window.XLSX);
       script.onerror=()=>{state.sheetJsPromise=null;reject(new Error('Library Excel gagal dimuat. Periksa koneksi internet lalu coba lagi.'))};
